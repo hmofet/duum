@@ -3,7 +3,9 @@
 A Doom engine written in Python. No native code, no third-party packages —
 `struct` and `math` from the standard library, and nothing else.
 
-![Duum rendering E1M1](docs/screenshot.png)
+![Duum rendering Freedoom E1M1](docs/screenshot.png)
+
+<sub>Freedoom E1M1, rendered by Duum at 640x400.</sub>
 
 It loads a real IWAD and draws a first-person, BSP-traversed, texture-mapped,
 perspective-correct view of it, with sprites, doors, lifts, monsters,
