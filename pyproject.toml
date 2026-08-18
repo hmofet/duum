@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "duum"
+version = "0.1.0"
+description = "A Doom engine written in pure Python, with no dependencies."
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MPL-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Arin Bakht" }]
+keywords = ["doom", "wad", "game", "engine", "raycaster", "pure-python"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Win32 (MS Windows)",
+    "Environment :: X11 Applications",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Games/Entertainment :: First Person Shooters",
+]
+# Deliberately empty, and meant to stay that way.  Duum runs on the standard
+# library alone; tkinter ships with CPython and is not installable from PyPI,
+# so it cannot be declared here even though the window needs it.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/hmofet/duum"
+Source = "https://github.com/hmofet/duum"
+
+[project.scripts]
+duum = "duum.__main__:main"
+
+[tool.setuptools]
+packages = ["duum", "duum.hosts", "duum.frontends"]

@@ -1,0 +1,4 @@
+# Duum ships source to other platforms (including a device that reads it
+# verbatim), so keep everything LF in the repo and in the checkout.
+* text=auto eol=lf
+*.png binary

@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller work + output (the .py distributions in dist/ ARE committed)
+build/
+exe/
+*.manifest
+
+# local scratch
+*.wad
+*.WAD
+shot*.png
+golden*.json
