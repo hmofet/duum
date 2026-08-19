@@ -10,6 +10,17 @@
     --line: #34302a; --accent: #c8632a; --bad: #d9534f;
   }
   * { box-sizing: border-box; }
+
+  /* `hidden` has to actually hide.
+     The UA stylesheet's [hidden] { display: none } is beaten by ANY author
+     rule that sets display, so .poster { display: flex } below silently made
+     the attribute a no-op: the poster stayed painted over the canvas, opaque
+     gradient and all, while the engine ran happily behind it. Sound played,
+     the frame counter ticked, and the picture was simply never visible.
+     It is not enough to hide the poster by hand here, because the same trap
+     is waiting for every future element that both sets display and toggles
+     hidden, so the rule is global. */
+  [hidden] { display: none !important; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
     font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;

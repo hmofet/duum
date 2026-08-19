@@ -54,7 +54,7 @@ stage.py          assembles the deployable bundle
 web/              the page: index.html, duum.js, duum-worker.js
 ```
 
-## The six things that will bite
+## The seven things that will bite
 
 ### 1. The GC cannot scan the C stack, because on wasm there is no C stack to scan
 
@@ -132,7 +132,42 @@ leaving it out of `ONESHOT` means the menu appears not to exist at all. The
 headless gate cannot catch this, because it calls `duum_key()` directly and
 never goes through the page's routing; it took a browser and a screenshot.
 
-### 6. Name the wasm module something the page is not already called
+### 6. `hidden` does not hide an element whose class sets `display`
+
+The poster that covers the canvas until Play is pressed is
+`.poster { display: flex }`, and it is hidden with `el.hidden = true`. That did
+nothing at all. The UA stylesheet's `[hidden] { display: none }` is beaten by
+**any** author rule that sets `display`, so the poster stayed painted over the
+canvas, opaque gradient and all, with the engine running happily behind it.
+
+It reached a player as **"I do not see the game, but I hear the sounds and the
+FPS counter is moving"**, which is an exactly correct description of a working
+engine behind an opaque div. The fix is one global rule,
+`[hidden] { display: none !important; }`, rather than special-casing the
+poster, because the same trap waits for every future element that both sets
+`display` and toggles `hidden`.
+
+**How it got past every check, which is the part worth learning.** The page
+reported `poster.hidden === true`, and that was true: the *property* was set.
+And `window.duumSnap()` returned a perfect frame, because it asks the WORKER to
+convert the canvas it owns. Neither one looks at the composited page. A
+page-level check has to ask the layout engine:
+
+```js
+getComputedStyle(poster).display                    // "none", not "flex"
+poster.getBoundingClientRect()                      // 0x0, not 640x400
+```
+
+`document.elementFromPoint(cx, cy) === canvas` is the more direct assertion,
+and it is the one to reach for when there is a real window. But it needs a
+viewport: in a headless or undisplayed browser `innerWidth`/`innerHeight` are
+**0**, every point is outside the viewport, and it returns `null` whatever the
+layout is - which reads as a failure and is really no answer at all. That is
+how this bug survived: the environment it was checked in could not composite,
+so nothing about paint or hit-testing meant anything, while `getComputedStyle`
+kept working and would have caught it.
+
+### 7. Name the wasm module something the page is not already called
 
 The emscripten output and the page script were both `duum.js`, so the worker's
 `import("./duum.js")` resolved to the page instead of the runtime and reported
@@ -227,9 +262,16 @@ change each time. The menu is the one part of the engine that reads keys as
 events and navigates on device scancodes, which is two chances to wire a port
 up wrongly and neither of them shows in an ordinary frame.
 
-**What the headless gate cannot see is the page's own key routing**, because it
-calls into the module directly. That path needs a browser; trap 5 above is what
-happens when it does not get one.
+**What the headless gate cannot see is the page**: not its key routing, which
+it bypasses by calling the module directly, and not its layout, which it has no
+opinion about at all. Traps 5 and 6 are both what happens when that gap is not
+covered, and they are the two bugs that reached a player.
+
+`window.duumSnap()` does not close it either, and it is worth being precise
+about why: it proves the WORKER drew the right pixels into the canvas it owns.
+Whether those pixels are visible on the page is a separate question, and it is
+the one that was wrong. Checking the page needs `getComputedStyle` and
+`elementFromPoint` against a real browser, on the deployed page.
 
 Pass a fourth argument to write a PPM out and look at it. There is also
 `window.duumSnap()` on the page, which returns a PNG of exactly what is on
