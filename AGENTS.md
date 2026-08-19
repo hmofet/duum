@@ -170,8 +170,13 @@ third-party ends up in the running program.
 ## 6. Branch discipline
 
 ```
-git switch -c <slice> origin/master
+git worktree add ../duum-<slice> -b <slice> origin/master
 ```
+
+**A worktree, not just a branch, whenever anyone else might be working here.**
+A checkout has one HEAD: if a second agent switches branches in the same
+directory, your next commit lands on their branch without a word of warning.
+That has already happened once (see `DUUM-REQUESTS.md`, 2026-08-18).
 
 - Rebase onto `origin/master` at the start of every session.
 - **`master` is the only integration point.** Feature branches never merge each
