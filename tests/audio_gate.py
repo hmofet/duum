@@ -14,6 +14,7 @@
 
 import math
 import os
+import struct
 import sys
 import tempfile
 
@@ -85,6 +86,85 @@ class Deaf:
 
     def quiet(self):
         pass
+
+
+def read_smf(b):
+    """Parse a Standard MIDI File and report what is in it.
+
+    Written from the SMF spec and NOT from mus_to_midi: it insists on things
+    the converter is free to get wrong, such as every event carrying its own
+    status byte, the track length header agreeing with the file, and the
+    delta times adding up to a sensible number of seconds.
+    """
+    if b[:4] != b"MThd":
+        raise ValueError("no MThd")
+    ln, fmt, ntrk, div = struct.unpack_from(">IHHH", b, 4)
+    if (ln, fmt, ntrk) != (6, 0, 1):
+        raise ValueError("header is %d/%d/%d" % (ln, fmt, ntrk))
+    if b[14:18] != b"MTrk":
+        raise ValueError("no MTrk")
+    tlen = struct.unpack_from(">I", b, 18)[0]
+    if 22 + tlen != len(b):
+        raise ValueError("track says %d, file holds %d" % (tlen, len(b) - 22))
+    p = 22
+    endp = 22 + tlen
+    tick = 0
+    tempo = 500000
+    on = {}
+    notes = 0
+    notech = set()
+    while p < endp:
+        d = 0
+        while True:
+            c = b[p]
+            p += 1
+            d = (d << 7) | (c & 0x7F)
+            if not (c & 0x80):
+                break
+        tick += d
+        st = b[p]
+        if not (st & 0x80):
+            raise ValueError("running status at byte %d" % p)
+        p += 1
+        if st == 0xFF:
+            m = b[p]
+            p += 1
+            L = 0
+            while True:
+                c = b[p]
+                p += 1
+                L = (L << 7) | (c & 0x7F)
+                if not (c & 0x80):
+                    break
+            if m == 0x51:
+                tempo = (b[p] << 16) | (b[p + 1] << 8) | b[p + 2]
+            p += L
+            if m == 0x2F:
+                break
+            continue
+        hi = st & 0xF0
+        ch = st & 0x0F
+        if hi in (0x80, 0x90, 0xA0, 0xB0, 0xE0):
+            n = b[p]
+            v = b[p + 1]
+            p += 2
+            if hi == 0x90 and v > 0:
+                on[(ch, n)] = on.get((ch, n), 0) + 1
+                notes += 1
+                notech.add(ch)
+            elif hi == 0x80 or (hi == 0x90 and v == 0):
+                if on.get((ch, n)):
+                    on[(ch, n)] -= 1
+            elif hi == 0xB0 and n == 123:
+                for k in list(on):
+                    on[k] = 0
+        elif hi in (0xC0, 0xD0):
+            p += 1
+        else:
+            raise ValueError("bad status %02x" % st)
+    return {"secs": tick * (tempo / 1e6) / div, "notes": notes,
+            "stuck": sum(on.values()), "tempo": tempo, "div": div,
+            "notech": notech}
 
 
 def right_of(app):
@@ -291,6 +371,59 @@ def main():
     check("too much at once clips instead of wrapping",
           min(s) >= 0 and max(s) == 32767, "%d..%d" % (min(s), max(s)))
     desktop._snd_voices[:] = []
+
+    # ---- 8. the music -------------------------------------------------------
+    # read_smf below shares no code with the converter, on purpose and for the
+    # same reason duum_verify shares none with the renderer: a reader built
+    # out of the writer's own assumptions agrees with it about everything,
+    # including its mistakes.
+    lumps = []
+    seen = set()
+    for nm, off, sz in app.wad.dir:
+        if nm[:2] == b"D_" and sz > 0 and nm not in seen:
+            seen.add(nm)
+            lumps.append(nm)
+
+    bad = []
+    stuck = []
+    short = []
+    for nm in lumps:
+        smf = engine.mus_to_midi(app.wad.lump(nm))
+        if smf is None:
+            bad.append(nm.decode() + ": not converted")
+            continue
+        try:
+            r = read_smf(smf)
+        except Exception as e:
+            bad.append(nm.decode() + ": " + str(e))
+            continue
+        if r["stuck"]:
+            stuck.append(nm.decode() + " x" + str(r["stuck"]))
+        if not (3.0 <= r["secs"] <= 900.0) or r["notes"] < 20:
+            short.append("%s %.1fs %dn" % (nm.decode(), r["secs"], r["notes"]))
+    check("every MUS lump converts to a readable SMF", not bad,
+          "; ".join(bad[:3]))
+    # A note left on when the score ends is a drone that survives the loop,
+    # and it is the classic MUS conversion bug.
+    check("no score ends with a note still held", not stuck,
+          "; ".join(stuck[:3]))
+    check("every score has a plausible length", not short,
+          "; ".join(short[:3]))
+    check("the WAD's music was found at all", len(lumps) > 10,
+          str(len(lumps)) + " lumps")
+
+    # The tick rate is the one number that cannot be eyeballed later: get it
+    # wrong and every score plays at the wrong speed while still being valid
+    # MIDI.  70 ticks a quarter at 500,000 us is 1/140 s exactly.
+    r = read_smf(engine.mus_to_midi(app.wad.lump(b"D_E1M1")))
+    hz = 1e6 / (r["tempo"] / float(r["div"]))
+    check("a tick is 140 Hz, which is MUS's own rate", abs(hz - 140.0) < 0.01,
+          "%.3f Hz" % hz)
+
+    # Percussion has to move from MUS's channel 15 to MIDI's channel 9, or
+    # every drum comes out as whatever instrument is on 15.
+    check("percussion lands on MIDI channel 9", 9 in r["notech"],
+          "note channels: " + str(sorted(r["notech"])))
 
     print("%d check(s) failed" % len(FAILED))
     return 1 if FAILED else 0

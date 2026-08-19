@@ -17,6 +17,8 @@
 #
 #   sfx_load(slot, pcm, rate)            OPTIONAL keep a sample under `slot`
 #   sfx_play(slot, vol, sep)             OPTIONAL play it, mixed with the rest
+#   mus_play(smf, loop)                  OPTIONAL play a Standard MIDI File
+#   mus_stop()                           OPTIONAL and stop it
 #
 # pcm is unsigned 8-bit mono at `rate` Hz, straight out of the WAD's DS lump.
 # vol is 0..255 and sep is 0 hard left, 128 centre, 255 hard right.  The
@@ -27,6 +29,12 @@
 # Mixing is the host's job.  A one-voice host may drop the quietest sound
 # rather than refuse the call; nothing upstream can tell, and a missed
 # footstep is better than an exception in the middle of a frame.
+#
+# smf is a whole Standard MIDI File, format 0, converted from the WAD's MUS
+# lump by the engine and handed over once when a level loads.  The host holds
+# the clock and the synthesiser, because a frame loop is not a good enough
+# clock for music and because a host that already has a MIDI player (UnoDOS
+# does) then needs no new code at all.  `loop` asks for it to repeat.
 #
 # Every optional call is probed with hasattr, so a host may leave any of them
 # out: the engine falls back to its own timers, and to beep() for sound, and

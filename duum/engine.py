@@ -774,6 +774,146 @@ SND_FULL = 200.0
 SND_MAX = 1200.0
 
 
+# ---- music -----------------------------------------------------------------
+# The WAD's music is MUS, which is Doom's own score format: the same event
+# vocabulary as MIDI with the redundancy squeezed out, played at a fixed
+# 140 Hz.  There is no audio in it, only instructions, so something has to
+# synthesise it.
+#
+# That something is not this file.  The engine converts a MUS lump to a
+# Standard MIDI File and hands the bytes over, which puts the clock on the
+# host side (the only side with one steady enough for music) and means a host
+# that already has a MIDI player needs no new code to play Duum's music.  It
+# also keeps the per-frame cost at zero: the conversion happens once, when a
+# level loads, and the engine never thinks about music again.
+#
+# MUS controller number -> MIDI controller number.  Index 0 is the instrument,
+# which is a program change rather than a controller, so it is handled apart
+# and the 0 standing in for it here is never read.
+MUS_CTRL = (0, 0, 1, 7, 10, 11, 91, 93, 64, 67)
+# MUS system event (10..14) -> the MIDI channel-mode controller it means.
+MUS_SYS = (120, 123, 126, 127, 121)
+# A tick of 1/140 s exactly: 500,000 us per quarter note over 70 ticks per
+# quarter is 7142.857 us, which is the MUS rate with nothing rounded.
+MUS_DIV = 70
+MUS_TEMPO = 500000
+
+
+def vlq(n):
+    """A MIDI variable-length quantity: seven bits a byte, high bit continues."""
+    if n < 128:
+        return bytes((n,))
+    out = bytearray()
+    out.append(n & 0x7F)
+    n >>= 7
+    while n:
+        out.append((n & 0x7F) | 0x80)
+        n >>= 7
+    out.reverse()
+    return bytes(out)
+
+
+def mus_to_midi(data):
+    """A MUS lump as a Standard MIDI File, or None if it is not a MUS lump.
+
+    Channel 15 is percussion in MUS and channel 9 is percussion in MIDI, so
+    the two swap places; everything else passes straight through.  A note
+    without a volume byte reuses the channel's last one, which is where most
+    of MUS's compactness comes from and the one piece of state this needs.
+    """
+    if len(data) < 16 or data[0:4] != b"MUS\x1a":
+        return None
+    score_len, score_start = struct.unpack_from("<HH", data, 4)
+    end = score_start + score_len
+    if end > len(data):
+        end = len(data)
+    if score_start >= end:
+        return None
+
+    trk = bytearray()
+    trk += b"\x00\xff\x51\x03"
+    trk += bytes(((MUS_TEMPO >> 16) & 0xFF, (MUS_TEMPO >> 8) & 0xFF,
+                  MUS_TEMPO & 0xFF))
+    vol = [100] * 16
+    delta = 0
+    p = score_start
+    while p < end:
+        desc = data[p]
+        p += 1
+        typ = (desc >> 4) & 7
+        ch = desc & 15
+        mch = 9 if ch == 15 else (15 if ch == 9 else ch)
+        ev = None
+        if typ == 0:                            # release note
+            if p >= end:
+                break
+            ev = bytes((0x80 | mch, data[p] & 0x7F, 0x40))
+            p += 1
+        elif typ == 1:                          # play note
+            if p >= end:
+                break
+            b = data[p]
+            p += 1
+            if b & 0x80:
+                if p >= end:
+                    break
+                vol[ch] = data[p] & 0x7F
+                p += 1
+            ev = bytes((0x90 | mch, b & 0x7F, vol[ch]))
+        elif typ == 2:                          # pitch bend, 0..255 over +/-2
+            if p >= end:
+                break
+            w = data[p] * 64
+            p += 1
+            if w > 16383:
+                w = 16383
+            ev = bytes((0xE0 | mch, w & 0x7F, (w >> 7) & 0x7F))
+        elif typ == 3:                          # system event
+            if p >= end:
+                break
+            b = data[p]
+            p += 1
+            if 10 <= b <= 14:
+                ev = bytes((0xB0 | mch, MUS_SYS[b - 10], 0))
+        elif typ == 4:                          # controller, or an instrument
+            if p + 1 >= end:
+                break
+            c = data[p]
+            v = data[p + 1] & 0x7F
+            p += 2
+            if c == 0:
+                ev = bytes((0xC0 | mch, v))
+            elif c < 10:
+                ev = bytes((0xB0 | mch, MUS_CTRL[c], v))
+        elif typ == 6:                          # score end
+            break
+        # 5 is an end-of-measure marker and 7 is unused; both carry no bytes
+        # and mean nothing to MIDI, so they only ever contribute their delay.
+        if ev is not None:
+            trk += vlq(delta)
+            trk += ev
+            delta = 0
+        if desc & 0x80:                         # a delay follows this event
+            t = 0
+            while p < end:
+                b = data[p]
+                p += 1
+                t = (t << 7) | (b & 0x7F)
+                if not (b & 0x80):
+                    break
+            delta += t
+
+    # Leaving a note held when the score ends is how a loop turns into a
+    # drone, so every channel is silenced before the end of track.
+    for c in range(16):
+        trk += vlq(delta)
+        trk += bytes((0xB0 | c, 123, 0))
+        delta = 0
+    trk += b"\x00\xff\x2f\x00"
+    head = b"MThd" + struct.pack(">IHHH", 6, 0, 1, MUS_DIV)
+    return head + b"MTrk" + struct.pack(">I", len(trk)) + bytes(trk)
+
+
 class Mover:
     """One moving sector plane.  kind: 'door' (ceil up, wait, close),
     'open' (ceil up, stays), 'close' (ceil down, stays), 'lift' (floor down,
@@ -864,6 +1004,7 @@ class Duum(uno.App):
             self.have_keys = hasattr(uno, "keys_down")
             self.have_sfx = (hasattr(uno, "sfx_load") and
                              hasattr(uno, "sfx_play"))
+            self.have_mus = hasattr(uno, "mus_play")
             # per slot: 0 not asked for yet, 1 the host has it, 2 no such lump
             self.sfx_state = [0] * len(SFX)
             self.kd = 0; self.kd_prev = 0
@@ -883,6 +1024,37 @@ class Duum(uno.App):
             uno.beep(midi, ticks)
         except Exception:
             pass
+
+    def music(self, level):
+        """Start this level's score, if the host can play one.
+
+        The lump is D_ plus the level name, which is how every Doom WAD names
+        its music.  A WAD without one simply plays nothing, which is not an
+        error: plenty of PWADs ship levels and no score.
+        """
+        if not self.have_mus:
+            return
+        try:
+            data = self.wad.lump("D_" + level)
+            if not data:
+                return
+            smf = mus_to_midi(data)
+            if smf is not None:
+                uno.mus_play(smf, 1)
+        except Exception:
+            self.have_mus = False          # a host that throws has not got it
+
+    def music_stop(self):
+        if not self.have_mus:
+            return
+        try:
+            uno.mus_stop()
+        except Exception:
+            pass
+
+    def closed(self):
+        """The window is going away, so the music should not outlive it."""
+        self.music_stop()
 
     def sfx_lump(self, name):
         """A DS lump as (samples, rate), or (None, 0) if it is not usable.
@@ -1011,6 +1183,7 @@ class Duum(uno.App):
     def load_level(self, level):
         self.level = level
         self.lvl = Level(self.wad, level)
+        self.music(level)
         self.sky = self.tex.get("SKY" + level[1])   # E<n> -> SKY<n>
         px, py, pa = self.lvl.player_start()
         self.px = float(px); self.py = float(py)
