@@ -15,3 +15,6 @@ golden*.json
 
 # icon previews are for looking at, not for shipping
 packaging/icons/preview-*.png
+
+# the web port fetches MicroPython at build time (see ports/web/build.sh)
+ports/web/micropython/

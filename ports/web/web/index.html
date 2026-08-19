@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Duum in your browser</title>
+<style>
+  :root {
+    --bg: #14120f; --panel: #1e1b17; --ink: #e8e2d8; --dim: #9a9187;
+    --line: #34302a; --accent: #c8632a; --bad: #d9534f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  h1 { font-size: 1.9rem; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  .sub { color: var(--dim); margin: 0 0 2rem; }
+  a { color: var(--accent); }
+
+  /* content-box on purpose: with the global border-box a 1px border eats into
+     the width and a "2x" stage comes out 638 wide, which resamples after all
+     and undoes the entire point of integer scaling. */
+  .stage {
+    box-sizing: content-box; position: relative; display: block;
+    margin-left: 50%; transform: translateX(-50%); width: max-content;
+    border: 1px solid var(--line); background: #000; line-height: 0;
+  }
+  canvas { display: block; image-rendering: pixelated; outline: none; }
+  #screen { width: 640px; height: 400px; }
+
+  .poster {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 1rem;
+    background: linear-gradient(160deg, #241d17, #12100d);
+    line-height: 1.5; text-align: center; padding: 1.5rem;
+  }
+  .poster p { margin: 0; color: var(--dim); max-width: 26rem; font-size: .92rem; }
+
+  button {
+    font: inherit; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: .4rem;
+    padding: .55rem 1.1rem; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #14120f; font-weight: 600; }
+
+  .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap;
+         justify-content: center; margin-top: 1rem; }
+  select { font: inherit; background: var(--panel); color: var(--ink);
+           border: 1px solid var(--line); border-radius: .4rem; padding: .5rem; }
+
+  #bar { height: 4px; background: var(--line); margin-top: .9rem; border-radius: 2px; overflow: hidden; }
+  #bar-fill { height: 100%; width: 0; background: var(--accent); transition: width .15s linear; }
+
+  .meta { display: flex; justify-content: space-between; gap: 1rem;
+          margin-top: .7rem; color: var(--dim); font-size: .86rem; }
+  #stats { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .err { margin-top: 1rem; border: 1px solid var(--bad); border-radius: .4rem;
+         padding: .8rem 1rem; background: #2a1a19; }
+  .err h2 { margin: 0 0 .3rem; font-size: 1rem; color: var(--bad); }
+  pre { overflow-x: auto; font-size: .8rem; color: var(--dim); margin: .6rem 0 0; }
+
+  section { margin-top: 2.5rem; }
+  h2 { font-size: 1.1rem; margin: 0 0 .5rem; }
+  section p, li { color: var(--dim); font-size: .94rem; }
+  kbd { background: var(--panel); border: 1px solid var(--line); border-radius: .25rem;
+        padding: .05rem .35rem; font-size: .85em; color: var(--ink); }
+  footer { margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid var(--line);
+           color: var(--dim); font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Duum in your browser</h1>
+  <p class="sub">A Doom engine written in Python, running on a browser build of
+     its own runtime.</p>
+
+  <div class="stage" id="stage">
+    <canvas id="screen" width="640" height="400" tabindex="0"></canvas>
+    <div class="poster" id="poster">
+      <button class="primary" id="boot" data-manifest="wad/freedoom1.json">Play</button>
+      <p>Downloads about 10 MB the first time. Nothing is fetched until you
+         press it.</p>
+      <button id="pick">Use my own WAD</button>
+      <input type="file" id="file" accept=".wad,.WAD" hidden>
+    </div>
+  </div>
+
+  <div class="row">
+    <label for="scale">Size</label>
+    <select id="scale" disabled>
+      <option value="auto">auto</option>
+      <option value="1">1x</option>
+      <option value="2" selected>2x</option>
+      <option value="3">3x</option>
+      <option value="4">4x</option>
+    </select>
+    <button id="stop" hidden>Stop</button>
+  </div>
+
+  <div id="bar" hidden><div id="bar-fill"></div></div>
+  <div class="meta">
+    <span id="status">Press Play.</span>
+    <span id="stats"></span>
+  </div>
+  <div class="meta"><span id="wad-name"></span></div>
+
+  <div class="err" id="err" hidden>
+    <h2>That did not work</h2>
+    <div id="err-text"></div>
+    <pre id="err-log" hidden></pre>
+  </div>
+
+  <section>
+    <h2>Controls</h2>
+    <p><kbd>&uarr;</kbd> <kbd>&darr;</kbd> or <kbd>W</kbd> <kbd>S</kbd> move,
+       <kbd>&larr;</kbd> <kbd>&rarr;</kbd> or <kbd>A</kbd> <kbd>D</kbd> turn,
+       <kbd>,</kbd> <kbd>.</kbd> or <kbd>Q</kbd> <kbd>X</kbd> strafe,
+       <kbd>Ctrl</kbd> or <kbd>F</kbd> fire, <kbd>Space</kbd> or <kbd>E</kbd>
+       open and use, <kbd>1</kbd>&ndash;<kbd>6</kbd> pick a weapon.</p>
+  </section>
+
+  <section>
+    <h2>Bring your own WAD</h2>
+    <p><strong>Your file is not uploaded.</strong> It is read in this tab and
+       handed to the engine here; the page has no server to send it to. Any
+       IWAD Duum understands works, including commercial ones you own.</p>
+    <p>The engine parses that file inside a WebAssembly sandbox with no
+       filesystem, no network and no access to this page, running on its own
+       thread. A WAD that sends it somewhere it cannot return from costs you the
+       <em>Stop</em> button, not the tab.</p>
+  </section>
+
+  <section>
+    <h2>What this actually is</h2>
+    <p>Duum is a Doom engine written in Python: the BSP walk, the portal
+       clipping, the perspective-correct texture mapping and every line of the
+       game logic. It runs anywhere CPython does, and on
+       <a href="https://github.com/hmofet/unodos">UnoDOS</a> under MicroPython
+       on bare metal.</p>
+    <p>This page is a third port of it, and it is the same engine file
+       unmodified. What changed is underneath: MicroPython compiled to
+       WebAssembly, and the per-pixel span writers in C, exactly the arrangement
+       the bare-metal port uses. That is about 290 KB of WebAssembly, which is
+       the whole runtime and the whole engine.</p>
+  </section>
+
+  <footer>
+    <p>Duum is <a href="https://github.com/hmofet/duum">MPL-2.0</a>, written from
+       the public Doom specifications. Doom is a trademark of id Software; Duum
+       is not affiliated with or endorsed by them.</p>
+    <p id="credit">The shipped game data is
+       <a href="https://freedoom.github.io/">Freedoom Phase 1</a>, a free and
+       freely redistributable IWAD under its own BSD-style licence, and a
+       separate project.</p>
+  </footer>
+</main>
+<script src="duum.js" type="module"></script>
+</body>
+</html>
