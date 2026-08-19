@@ -133,12 +133,13 @@ interpreter and Duum, and nothing else.
 
 ## Tests
 
-Three gates, all runnable against any IWAD:
+Four gates, all runnable against any IWAD:
 
 ```bash
 python tools/duum_verify.py --wad freedoom1.wad     # geometry oracle
 python tools/duum_golden.py save --wad freedoom1.wad
 python tools/duum_golden.py check --wad freedoom1.wad
+python tools/duum_collide.py --wad freedoom1.wad    # collision, doors, rockets
 python tests/smoke_window.py freedoom1.wad          # the frontend actually runs
 ```
 
@@ -152,6 +153,12 @@ no holes, no overdraw. It must report **0 failing views**.
 `duum_golden.py` hashes rendered frames across 54 viewpoints, which is the
 check you want when optimising: "looks the same" is not good enough, and it
 catches a one-pixel drift.
+
+`duum_collide.py` is the one that is not about pixels. Both of the others take
+the player's position as an input, so they render a perfectly good frame from
+inside a wall and report success; this one walks the player into a known wall,
+makes 36,000 randomised moves that may not cross a single one-sided linedef,
+opens all 110 use-doors in the episode, and fires a rocket at a wall.
 
 ## Working on Duum
 

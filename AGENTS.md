@@ -5,7 +5,7 @@ this repository, whatever the task. It is the sibling of
 [UnoDOS's `AGENTS.md`](https://github.com/hmofet/unodos/blob/master/AGENTS.md)
 and follows the same shape deliberately, so an agent that knows one knows both.
 
-Duum is small — one engine file, one rasteriser, a host, a frontend, three
+Duum is small — one engine file, one rasteriser, a host, a frontend, four
 gates. The risk here is therefore not merge collision between many agents; it
 is **silently breaking a port you cannot see from this checkout**. Two contracts
 leave this repository and are compiled into other people's code (§2). Most of
@@ -97,7 +97,7 @@ exists so that when it does not, the seams are already named.
 | reference rasteriser | `duum/raster.py` | **contract** — see §2 |
 | platform surface + desktop host | `duum/hostapi.py`, `duum/hosts/` | **contract** — see §2 |
 | frontend | `duum/frontends/tkwin.py`, `duum/__main__.py` | desktop only; no port sees this |
-| gates | `tools/duum_verify.py`, `tools/duum_golden.py` | `duum_verify` shares no code with the engine ON PURPOSE — never "simplify" it by importing from `duum.engine` |
+| gates | `tools/duum_verify.py`, `tools/duum_golden.py`, `tools/duum_collide.py` | `duum_verify` shares no code with the engine ON PURPOSE — never "simplify" it by importing from `duum.engine` |
 | build + packaging | `tools/build.py`, `packaging/build_exe.py` | |
 | generated distributions | `dist/desktop/duum.py`, `dist/unodos/DUUM.PY` | **generated — never hand-edit** (§4) |
 
@@ -128,8 +128,9 @@ it there. See §7.
 Before landing anything, from a checkout with a WAD:
 
 ```bash
-python tools/duum_verify.py --wad DOOM1.WAD          # must be 0 failing views
+python tools/duum_verify.py --wad DOOM1.WAD           # must be 0 failing views
 python tools/duum_golden.py check --wad DOOM1.WAD     # must be N/N identical
+python tools/duum_collide.py --wad DOOM1.WAD          # must be 4/4 checks
 python tools/build.py --check DOOM1.WAD               # distributions rebuild + render
 python tests/smoke_window.py DOOM1.WAD                # the frontend actually runs
 ```
@@ -147,10 +148,20 @@ What each one is for, because they are not interchangeable:
 - If a change is *meant* to move pixels, **look at the diff first**, say in the
   commit message which views moved and why, then re-`save`. Re-saving a golden
   baseline without reading the diff is how a rendering regression gets blessed.
-- Gameplay changes (collision, doors, combat) are outside both gates by nature —
-  the oracle renders, it does not simulate. Land those with a **scripted
-  reproduction** in the commit message: a map, a spawn point, a key sequence,
-  and the before/after. "Feels right now" is not a result.
+- **`duum_collide` is the movement gate**, and it exists because the other two
+  structurally cannot catch what it catches: both take the player's POSITION as
+  an input, so a player standing inside a wall is an invalid viewpoint fed to a
+  working renderer and both gates pass while the game is unplayable. That is
+  exactly how "Duum has no wall collision" survived to a hardware bring-up. It
+  asserts about movement instead: a scripted walk into a known wall, 36,000
+  randomised moves that may not cross a one-sided linedef, every use-door in the
+  episode, and a rocket fired at a wall.
+- Gameplay changes not covered by it (combat, pickups, monster behaviour) are
+  outside all three by nature — the oracle renders, it does not simulate. Land
+  those with a **scripted reproduction** in the commit message: a map, a spawn
+  point, a key sequence, and the before/after. "Feels right now" is not a
+  result, and if the reproduction is worth writing twice it belongs in
+  `duum_collide` instead.
 
 A Windows `.exe` (`python packaging/build_exe.py`) is not part of the gate; it
 is a release step, and PyInstaller is a **build-time tool only** — nothing
