@@ -27,12 +27,11 @@ nothing solid to stand against.
 gate that keeps it`. Reproduction, method and measured result are in that
 commit message; the standing check is `tools/duum_collide.py`.
 
-**Still to do downstream:** UnoDOS is one sync behind this fix. It lands there
-with `python pc64/tools/sync_duum.py --from ../duum`, and the "Open reports for
-upstream" section of its `pc64/DUUM-UPSTREAM.md` should lose the NO WALL
-COLLISION entry in the same commit. Door operation was reported UNVERIFIED on
-hardware for want of anything solid to stand against; all 110 use-doors now
-pass the gate on the desktop, so it is worth re-testing on the device.
+**Synced to UnoDOS** (master `30563a85`, then again at `8fcdc6a8` for the
+menu), full merge gate green on both. Door operation is no longer blocked, but
+it is still UNVERIFIED ON HARDWARE: 110/110 use-doors pass on the host, and the
+reason they could not be tested on the ZimaBlade was that nothing solid existed
+to stand against. Worth re-running on the device.
 
 ## 2026-08-18, CLAIM: engine collision, by the agent landing the above
 
@@ -77,3 +76,40 @@ different repositories. `AGENTS.md` §2 already says a break needs a note here
 and a mention in the release notes; this is the reminder that the note has two
 addressees.
 
+
+## 2026-08-19, REQUEST answered: the five optional host hooks exist on UnoDOS
+
+`bind_name`, `bind_set`, `bind_reset`, `pref_get`, `pref_set` are implemented
+on pc64 (`uno_binds.c`, exposed through `mod_uno.c`, landed at `6d90ac17`), so
+the Controls screen works on the device and the FPS setting survives a reboot.
+No engine change was needed for it, which was the point of probing every one
+with `hasattr`.
+
+Two facts from that port that shape what those hooks may assume:
+
+- **A key id is not a scancode.** pc64 has two keyboard transports in two code
+  spaces, so it stores bindings as unshifted ASCII plus a small set of named
+  codes. Any host will need some such normalisation; the engine deliberately
+  never sees it.
+- **A host may refuse an action.** pc64 refuses Use, because it reads Use as a
+  key event rather than from the held bitmap its binding table feeds, so a
+  stored binding would do nothing. That is why `capture_done` takes
+  True/False/None rather than a bool: taken, refused, cancelled.
+
+## 2026-08-19, NOTE: session close
+
+Landed this session, all on `master` with the gates green:
+
+| | |
+|---|---|
+| wall collision, projectiles, `duum_collide` | `3fab45c` |
+| the working agreement, `CLAUDE.md`, this file | `fc25399` |
+| the icon, drawn rather than stored | `e188366` |
+| pause menu, FPS counter, remappable keys, the left/right swap | `393d457` |
+| the device's Escape, and Quit only where it works | `794dbd6` |
+| capture where there is no frontend | `4fbe001` |
+
+**Open, and both need real hardware rather than another gate:** door operation
+and the Controls screen have never been exercised on the ZimaBlade. Everything
+either one depends on is asserted on the host and in QEMU, which is exactly the
+position the wall-collision bug hid in for months.
