@@ -33,8 +33,22 @@ Run it with no argument and it looks for a WAD in the current directory,
 next to itself, and in your Documents folder.
 
 Controls: arrows or WASD to move and turn, `,`/`.` (or Q/X) to strafe,
-Ctrl or F to fire, Space or E to open and use, 1–6 to pick a weapon, Esc to
-quit.
+Ctrl or F to fire, Space or E to open and use, 1–6 to pick a weapon.
+
+**Esc opens the menu**, which pauses the game and holds the clock still, so
+nothing is waiting to happen the moment you come back. Under Options there is
+an FPS counter and a Controls screen: pick an action, press the key you want
+on it, and it is yours. Arrows, Enter and Esc drive the menu itself and cannot
+be rebound — a menu you can lock yourself out of would be worse than none.
+
+Settings live in one small text file, written when you change something:
+
+| | |
+|---|---|
+| Windows | `%APPDATA%\Duum\duum.cfg` |
+| everywhere else | `~/.config/duum/duum.cfg` |
+
+Delete it to go back to the defaults, or use *Reset to defaults* in the menu.
 
 ## You need a WAD
 
@@ -99,6 +113,9 @@ duum/
   hostapi.py         picks the platform (below)
   hosts/desktop.py   file I/O, clock, key state, on the standard library
   frontends/tkwin.py a tkinter window
+packaging/
+  icon.py            the app icon, drawn from scratch, every platform
+  build_exe.py       the Windows .exe
 tools/
   build.py           fold the package into the single-file distributions
   bench.py           the table above
@@ -131,6 +148,19 @@ python packaging/build_exe.py
 PyInstaller is a build-time tool only — the `.exe` embeds a Python
 interpreter and Duum, and nothing else.
 
+The application icon is drawn rather than stored:
+
+```bash
+python packaging/icon.py --preview
+```
+
+writes `packaging/icons/` — a Windows `.ico`, a macOS `.icns` and Linux PNGs —
+from about forty lines of ellipse arithmetic, with `zlib` and `struct` for the
+containers. No imaging library, for the same reason as everything else here.
+The mark is identical on every platform; the accent (the rim light and the bar
+along the bottom) is blue on Windows, graphite on macOS and amber on Linux, so
+that three builds on one desk are still telling you which is which.
+
 ## Tests
 
 Four gates, all runnable against any IWAD:
@@ -140,6 +170,7 @@ python tools/duum_verify.py --wad freedoom1.wad     # geometry oracle
 python tools/duum_golden.py save --wad freedoom1.wad
 python tools/duum_golden.py check --wad freedoom1.wad
 python tools/duum_collide.py --wad freedoom1.wad    # collision, doors, rockets
+python tests/input_menu.py freedoom1.wad            # what keys do, and the menu
 python tests/smoke_window.py freedoom1.wad          # the frontend actually runs
 ```
 
@@ -153,6 +184,15 @@ no holes, no overdraw. It must report **0 failing views**.
 `duum_golden.py` hashes rendered frames across 54 viewpoints, which is the
 check you want when optimising: "looks the same" is not good enough, and it
 catches a one-pixel drift.
+
+`input_menu.py` needs no display: it asks what a key press actually does. Its
+first check is there because "Left turns left" was **wrong in shipped builds**
+for as long as the frontend kept its own key table — the held-key bits follow
+the device's scancodes (Up=1 Down=2 Right=3 Left=4), so bit 4 is *right*, and a
+table written in the obvious order swaps the arrows. It is asserted against
+strafing rather than against the view angle, because turning left and strafing
+left have to agree about which way left is, and that is a claim with no
+convention in it.
 
 `duum_collide.py` is the one that is not about pixels. Both of the others take
 the player's position as an input, so they render a perfectly good frame from

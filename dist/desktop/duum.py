@@ -115,7 +115,14 @@ def ticks():
 # for 0.3s after each press and leaning on typematic repeat.  A desktop does
 # have key-up, so a frontend can fill this in and get exact control.
 #
-#   1 up   2 down   4 left   8 right   16 fire   32 use   64 strafeL  128 strafeR
+#   1 up  2 down  4 turn RIGHT  8 turn LEFT  16 fire  32 use  64 strafeL
+#   128 strafeR
+#
+# Right before left is not a typo and is worth stating loudly, because it has
+# already cost one bug: the bits follow the DEVICE's scancodes (Up=1 Down=2
+# Right=3 Left=4) through the engine's KDBITS, so bit 4 is scancode 3, which is
+# RIGHT.  A frontend that assumes the obvious order ships with the arrow keys
+# swapped, and that is exactly what happened.
 
 _keys = [0]
 
@@ -126,6 +133,195 @@ def set_keys(mask):
 
 def keys_down():
     return _keys[0]
+
+
+# ---- key bindings ----------------------------------------------------------
+# The engine names ACTIONS; naming the KEY on one is the host's job, because
+# a tkinter keysym means nothing to UnoDOS's C keyboard code and vice versa.
+# So this table, and the four hooks under it, are what the engine's Controls
+# screen drives.  The engine probes every one with hasattr: a host without
+# them still plays the whole game, it just cannot remap.
+#
+# Action ids ARE the held-key bitmap's bits (see keys_down below), because the
+# bitmap is the contract and a second numbering would only have to be kept in
+# step with it.
+
+A_FWD, A_BACK, A_TURNR, A_TURNL = 1, 2, 4, 8
+A_FIRE, A_USE, A_STRL, A_STRR = 16, 32, 64, 128
+
+DEFAULT_BINDS = {
+    A_FWD:   ["Up", "w"],
+    A_BACK:  ["Down", "s"],
+    A_TURNL: ["Left", "a"],
+    A_TURNR: ["Right", "d"],
+    A_STRL:  ["comma", "q"],
+    A_STRR:  ["period", "x"],
+    A_FIRE:  ["f", "Control_L", "Control_R"],
+    A_USE:   ["space", "e"],
+}
+
+# Reserved: the menu is navigated with these, and a player who rebinds Move
+# Forward onto Escape has locked themselves out of the screen that would undo
+# it.  Refusing them is friendlier than a menu that can be lost.
+RESERVED = ("Escape", "Return", "KP_Enter", "Tab")
+
+# Pretty names, for the ones whose keysym is not what is printed on the key.
+_PRETTY = {"comma": ",", "period": ".", "space": "Space", "Return": "Enter",
+           "Control_L": "Ctrl", "Control_R": "RCtrl", "Escape": "Esc",
+           "Prior": "PgUp", "Next": "PgDn", "BackSpace": "Bksp"}
+
+_binds = {}                      # action -> [keysym, ...]
+
+
+def _clone_defaults():
+    out = {}
+    for a in DEFAULT_BINDS:
+        out[a] = list(DEFAULT_BINDS[a])
+    return out
+
+
+def bind_reset():
+    """Back to the shipped bindings."""
+    global _binds
+    _binds = _clone_defaults()
+    _save()
+
+
+def bind_mask(keysym):
+    """The held-key bit this physical key contributes, or 0."""
+    m = 0
+    for a in _binds:
+        if keysym in _binds[a] and a != A_USE:
+            m |= a
+    return m
+
+
+def bind_oneshot(keysym):
+    """The unicode the engine wants as a one-shot event, or 0.
+
+    Use is a one-shot rather than a held bit - holding the use key should not
+    keep re-opening a door - and the weapon digits are not remappable, so they
+    are answered here directly.
+    """
+    if keysym in _binds.get(A_USE, ()):
+        return 32
+    if len(keysym) == 1 and "1" <= keysym <= "6":
+        return ord(keysym)
+    if keysym == "Return":
+        return 13
+    return 0
+
+
+def bind_name(action):
+    """What to print in the Controls screen for this action."""
+    ks = _binds.get(action) or []
+    return " / ".join(_PRETTY.get(k, k.upper() if len(k) == 1 else k)
+                      for k in ks[:2])
+
+
+def bind_set(action, keysym):
+    """Put `keysym` on `action`, exclusively.  -> True if it took.
+
+    Exclusively in both directions: the action loses whatever it had, and the
+    key is taken off every other action, because a key that walks forward AND
+    fires is a bug report rather than a feature.
+    """
+    if not keysym or keysym in RESERVED:
+        return False
+    if len(keysym) == 1 and "1" <= keysym <= "6":
+        return False                      # the weapon digits are fixed
+    for a in _binds:
+        if keysym in _binds[a]:
+            _binds[a] = [k for k in _binds[a] if k != keysym]
+    _binds[action] = [keysym]
+    _save()
+    return True
+
+
+def binds():
+    """The whole table, for a frontend that wants to inspect it."""
+    return _binds
+
+
+# ---- preferences -----------------------------------------------------------
+# One small text file: the bindings above and whatever the engine asks to
+# remember (today, whether the FPS counter is on).  A desktop host may use the
+# standard library freely - the read-only size/read_at contract is about the
+# DEVICE, where writing needs a filesystem the engine has no business
+# assuming.
+
+import os as _os
+
+_prefs = {}
+_cfg_loaded = [False]
+
+
+def config_path():
+    if _os.name == "nt":
+        base = _os.environ.get("APPDATA") or _os.path.expanduser("~")
+        return _os.path.join(base, "Duum", "duum.cfg")
+    base = _os.environ.get("XDG_CONFIG_HOME") or \
+        _os.path.join(_os.path.expanduser("~"), ".config")
+    return _os.path.join(base, "duum", "duum.cfg")
+
+
+def _load():
+    if _cfg_loaded[0]:
+        return
+    _cfg_loaded[0] = True
+    global _binds
+    _binds = _clone_defaults()
+    try:
+        with open(config_path(), encoding="utf-8") as f:
+            text = f.read()
+    except Exception:
+        return
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip(); v = v.strip()
+        if k.startswith("bind."):
+            try:
+                a = int(k[5:])
+            except ValueError:
+                continue
+            if a in DEFAULT_BINDS:
+                _binds[a] = [x for x in v.split() if x]
+        else:
+            _prefs[k] = v
+
+
+def _save():
+    try:
+        path = config_path()
+        d = _os.path.dirname(path)
+        if d and not _os.path.isdir(d):
+            _os.makedirs(d)
+        out = ["# Duum settings.  Delete this file to go back to defaults."]
+        for k in sorted(_prefs):
+            out.append("%s = %s" % (k, _prefs[k]))
+        for a in sorted(_binds):
+            out.append("bind.%d = %s" % (a, " ".join(_binds[a])))
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+    except Exception:
+        pass                      # a read-only home is not worth a crash
+
+
+def pref_get(name):
+    _load()
+    return _prefs.get(name)
+
+
+def pref_set(name, value):
+    _load()
+    _prefs[name] = value
+    _save()
+
+
+_load()
 
 
 # ---- sound -----------------------------------------------------------------
@@ -452,6 +648,32 @@ ML_BLOCKMONST = 2
 ML_TWOSIDED   = 4
 ML_DONTPEGTOP = 8
 ML_DONTPEGBOT = 16
+
+# ---- actions, and who owns what about a key ------------------------------
+# An ACTION is the engine's idea ("turn left").  The PHYSICAL KEY behind it
+# belongs to the host, and deliberately so: UnoDOS's C keyboard code and a
+# tkinter window have no way of naming a key that means the same thing.  So
+# the engine names actions, asks the host what key is on one, and asks the
+# host to change it.  Both requests are optional (`hasattr`), so a host that
+# cannot remap simply says so in the menu.
+#
+# The ids are the same numbers the held-key bitmap uses, because that bitmap
+# is the contract and there is no sense in inventing a second numbering that
+# has to be kept in step with it.
+A_FWD    = 1
+A_BACK   = 2
+A_TURNR  = 4
+A_TURNL  = 8
+A_FIRE   = 16
+A_USE    = 32
+A_STRL   = 64
+A_STRR   = 128
+
+# Order is the order the Controls screen lists them in.
+ACTIONS = ((A_FWD, "Move forward"), (A_BACK, "Move back"),
+           (A_TURNL, "Turn left"), (A_TURNR, "Turn right"),
+           (A_STRL, "Strafe left"), (A_STRR, "Strafe right"),
+           (A_FIRE, "Fire"), (A_USE, "Open / use"))
 
 # collision
 MAXSTEP = 24       # tallest step a thing can climb without a jump
@@ -1137,6 +1359,7 @@ class Duum(uno.App):
             self.have_keys = hasattr(uno, "keys_down")
             self.kd = 0; self.kd_prev = 0
             self.rng = 0x29A5D1
+            self.menu_init()
             self.new_game(LEVEL)
         except Exception as e:
             self.err = repr(e)
@@ -2095,6 +2318,213 @@ class Duum(uno.App):
             else:
                 cv.text(cx - 60, cy - 4, "Entering " + nxt, rgb(235, 235, 210))
             cv.text(cx - 76, cy + 14, "press SPACE to continue", rgb(180, 180, 180))
+        self.fps_sample()
+        if self.show_fps:
+            cv.text(self.cw - 56, 6, "%d FPS" % (self.fps + 0.5),
+                    rgb(120, 250, 140))
+        if self.menu is not None:
+            self.draw_menu(cv)
+
+    # ---- menu, options and the FPS counter ----------------------------------
+    # The menu is drawn with `fill_rect` and `text`, the two canvas calls every
+    # port already has, so it costs the ports nothing and needs no change to
+    # the span-writer contract.
+    #
+    # It pauses the world by NOT ADVANCING THE CLOCK. `now` is an absolute time
+    # that refire, messages, door waits and every monster timer are compared
+    # against, so letting it run while paused would make all of them fire at
+    # once on resume.
+
+    M_MAIN, M_OPTS, M_KEYS = 0, 1, 2
+
+    def menu_init(self):
+        self.menu = None            # None, or [screen, cursor]
+        self.menu_dirty = False
+        self.capture = None         # action id the host is capturing a key for
+        self.quit = False           # the frontend closes the window on this
+        self.fps = 0.0
+        self.fps_n = 0
+        self.fps_t = uno.ticks() if self.have_ticks else 0
+        self.show_fps = self.pref("fps", "0") == "1"
+
+    # -- optional host hooks.  Every one is PROBED, never required: a port with
+    #    none of them still runs the whole game, and the menu says as much
+    #    rather than offering a control that would do nothing.
+    def pref(self, name, default):
+        if hasattr(uno, "pref_get"):
+            try:
+                v = uno.pref_get(name)
+                if v is not None:
+                    return v
+            except Exception:
+                pass
+        return default
+
+    def pref_put(self, name, value):
+        if hasattr(uno, "pref_set"):
+            try:
+                uno.pref_set(name, value)
+            except Exception:
+                pass
+
+    def can_bind(self):
+        return hasattr(uno, "bind_name")
+
+    def bind_name(self, action):
+        try:
+            return uno.bind_name(action) or "-"
+        except Exception:
+            return "-"
+
+    def menu_open(self):
+        return self.menu is not None
+
+    def wants_raw(self):
+        """True when the frontend should forward every key press as an event.
+
+        Movement keys normally arrive as a HELD BITMAP and are deliberately not
+        sent as events, because `key()` marks a key held for 0.3s and that
+        would make walking sticky.  While the menu is up nothing is walking.
+        """
+        return self.menu is not None or self.capture is not None
+
+    def menu_rows(self):
+        """The current screen as [(label, value)]; value "" for a plain item."""
+        if self.menu is None:
+            return []
+        sc = self.menu[0]
+        if sc == Duum.M_MAIN:
+            return [("Resume", ""), ("Options", ""), ("Quit", "")]
+        if sc == Duum.M_OPTS:
+            return [("FPS counter", "on" if self.show_fps else "off"),
+                    ("Controls", ""), ("Back", "")]
+        rows = []
+        if not self.can_bind():
+            rows.append(("this platform cannot remap keys", ""))
+        else:
+            for act, label in ACTIONS:
+                rows.append((label, self.bind_name(act)))
+            rows.append(("Reset to defaults", ""))
+        rows.append(("Back", ""))
+        return rows
+
+    def menu_key(self, uni, scan):
+        """Menu navigation: arrows, Enter, Esc, and never remappable.
+
+        A menu you can lock yourself out of by rebinding is worse than no menu,
+        so these four are fixed even though everything they configure is not.
+        """
+        if self.capture is not None:
+            return True                        # the frontend owns the next key
+        rows = self.menu_rows()
+        n = len(rows)
+        self.menu_dirty = True
+        if uni == 27:                          # Esc: back one screen, or out
+            if self.menu[0] == Duum.M_MAIN:
+                self.menu = None
+            else:
+                self.menu = [Duum.M_OPTS if self.menu[0] == Duum.M_KEYS
+                             else Duum.M_MAIN, 0]
+            return True
+        if scan == 1:                          # up
+            self.menu[1] = (self.menu[1] - 1) % n
+            return True
+        if scan == 2:                          # down
+            self.menu[1] = (self.menu[1] + 1) % n
+            return True
+        if scan == 3 or scan == 4:             # left/right change a value
+            if self.menu[0] == Duum.M_OPTS and self.menu[1] == 0:
+                self.toggle_fps()
+            return True
+        if uni == 13 or uni == 32:             # Enter / Space activates
+            self.menu_activate()
+            return True
+        return True                            # swallow everything else
+
+    def toggle_fps(self):
+        self.show_fps = not self.show_fps
+        self.pref_put("fps", "1" if self.show_fps else "0")
+
+    def menu_activate(self):
+        sc, i = self.menu
+        rows = self.menu_rows()
+        label = rows[i][0] if i < len(rows) else ""
+        if sc == Duum.M_MAIN:
+            if i == 0:
+                self.menu = None
+            elif i == 1:
+                self.menu = [Duum.M_OPTS, 0]
+            else:
+                self.quit = True
+        elif sc == Duum.M_OPTS:
+            if i == 0:
+                self.toggle_fps()
+            elif i == 1:
+                self.menu = [Duum.M_KEYS, 0]
+            else:
+                self.menu = [Duum.M_MAIN, 0]
+        else:
+            if label == "Back":
+                self.menu = [Duum.M_OPTS, 0]
+            elif label == "Reset to defaults":
+                if hasattr(uno, "bind_reset"):
+                    try:
+                        uno.bind_reset()
+                    except Exception:
+                        pass
+            elif self.can_bind() and i < len(ACTIONS):
+                self.capture = ACTIONS[i][0]
+
+    def capture_done(self, ok):
+        """The frontend has taken, or refused, a key for self.capture."""
+        self.capture = None
+        self.menu_dirty = True
+
+    def fps_sample(self):
+        """Frames per second over a ~1s window.
+
+        Counted in draw(), because draw() is one PAINT on every port and tick()
+        is not: UnoDOS repaints only when tick() reports something changed, so
+        counting ticks would report a frame rate the screen never showed.
+        """
+        if not self.have_ticks:
+            return
+        self.fps_n += 1
+        tk = uno.ticks()
+        d = tk - self.fps_t
+        if d >= 60:
+            self.fps = self.fps_n * 60.0 / d
+            self.fps_n = 0
+            self.fps_t = tk
+
+    def draw_menu(self, cv):
+        rows = self.menu_rows()
+        cw = self.cw; ch = self.ch
+        wide = self.menu[0] == Duum.M_KEYS
+        w = 236 if wide else 172
+        vx = w - (88 if wide else 60)      # the value column
+        h = 46 + 16 * len(rows)
+        x = (cw - w) // 2
+        y = (ch - h) // 2
+        cv.fill_rect(x - 2, y - 2, w + 4, h + 4, rgb(120, 30, 24))
+        cv.fill_rect(x, y, w, h, rgb(18, 16, 18))
+        cv.text(x + 10, y + 6, ("DUUM", "OPTIONS", "CONTROLS")[self.menu[0]],
+                rgb(240, 90, 70))
+        for i in range(len(rows)):
+            label, value = rows[i]
+            ry = y + 26 + 16 * i
+            on = (i == self.menu[1])
+            if on:
+                cv.fill_rect(x + 4, ry - 3, w - 8, 16, rgb(48, 26, 24))
+            col = rgb(255, 220, 140) if on else rgb(200, 190, 180)
+            cv.text(x + 12, ry, label, col)
+            if value:
+                if self.capture is not None and i < len(ACTIONS) and \
+                        ACTIONS[i][0] == self.capture:
+                    cv.text(x + vx, ry, "press a key", rgb(250, 120, 90))
+                else:
+                    cv.text(x + vx, ry, value, col)
+        cv.text(x + 12, y + h - 15, "arrows   enter   esc", rgb(122, 112, 108))
 
     # ---- input --------------------------------------------------------------
     # There are no key-up events on this platform.  A key event marks the key
@@ -2103,6 +2533,12 @@ class Duum(uno.App):
     def key(self, uni, scan, ctrl):
         if self.err is not None:
             return False
+        if self.menu is not None:
+            return self.menu_key(uni, scan)
+        if uni == 27:                              # Esc opens the menu
+            self.menu = [Duum.M_MAIN, 0]
+            self.menu_dirty = True
+            return True
         if self.dead or self.finish is not None:
             if uni == 32 or scan == 0x01 or uni == 13:
                 if self.finish is not None:
@@ -2167,6 +2603,16 @@ class Duum(uno.App):
             dt = 0.033
         if dt > 0.1:
             dt = 0.1
+        if self.menu is not None:
+            # Paused.  `now` deliberately does not advance (see menu_init), and
+            # the held-key bitmap is dropped so releasing a key behind the menu
+            # cannot leave the player walking on resume.
+            self.kd_prev = self.kd = 0
+            self.held = {}
+            if self.menu_dirty:
+                self.menu_dirty = False
+                return True
+            return False
         self.now += dt
         if self.have_keys:
             self.kd_prev = self.kd
@@ -3110,24 +3556,30 @@ app = Duum()
 import tkinter
 
 
-# Held-key bitmap, matching the device's UNO_KH_* bits.  Movement, strafing
-# and fire are read from this every tick, so they are exact: pressed means
-# pressed, released means released.
-_BITS = {
-    "Up": 1, "w": 1,
-    "Down": 2, "s": 2,
-    "Left": 4, "a": 4,
-    "Right": 8, "d": 8,
-    "f": 16, "Control_L": 16, "Control_R": 16,
-    "space": 32, "e": 32,
-    "comma": 64, "q": 64,
-    "period": 128, "x": 128,
-}
+# What a physical key DOES now lives in the host (duum/hosts/desktop.py), so
+# that the engine's Controls screen can change it and so that this file and
+# the config file cannot disagree about it.  This module only has to turn a Tk
+# event into something the host or the engine understands.
+#
+# It used to keep its own table, and got it wrong: it assumed the held-key bits
+# ran up/down/left/right, when they follow the DEVICE's scancodes (Up=1 Down=2
+# Right=3 Left=4), so bit 4 is RIGHT.  Left and right were swapped on the arrow
+# keys and on A/D for as long as that table existed.
 
-# Keys the engine wants as one-shot events rather than as held state: the
-# weapon digits, and the any-key that restarts after death or an exit.
-_ONESHOT = {"1": 49, "2": 50, "3": 51, "4": 52, "5": 53, "6": 54,
-            "space": 32, "Return": 13}
+# Keysym -> (unicode, scancode) for the keys the engine reads as events: menu
+# navigation, and Escape to open it.  Scancodes are the device's.
+_RAW = {"Up": (0, 1), "Down": (0, 2), "Right": (0, 3), "Left": (0, 4),
+        "Return": (13, 0), "KP_Enter": (13, 0), "Escape": (27, 0),
+        "space": (32, 0)}
+
+
+def _raw(ev):
+    """A Tk key event as the (uni, scan, ctrl) the engine's key() takes."""
+    r = _RAW.get(ev.keysym)
+    if r is not None:
+        return r[0], r[1], 0
+    ch = ev.char
+    return (ord(ch) if len(ch) == 1 else 0), 0, 0
 
 
 class Window:
@@ -3160,22 +3612,37 @@ class Window:
     def _mask(self):
         m = 0
         for k in self.held:
-            m |= _BITS.get(k, 0)
+            m |= desktop.bind_mask(k)
         return m
 
     def _down(self, ev):
         k = ev.keysym
-        if k == "Escape":
-            self._close()
+        app = self.app
+
+        # Rebinding: the engine asked for a key and this is it.  Capture stays
+        # a FRONTEND job on purpose - the engine has no business knowing that
+        # this platform calls a key "Control_L".
+        if getattr(app, "capture", None) is not None:
+            app.capture_done(desktop.bind_set(app.capture, k))
             return
-        if k in _BITS:
+
+        # Menu up: everything is navigation, nothing is movement.
+        if app.wants_raw():
+            uni, scan, ctrl = _raw(ev)
+            app.key(uni, scan, ctrl)
+            return
+
+        if k == "Escape":
+            app.key(27, 0, 0)                 # opens the menu
+            return
+        if desktop.bind_mask(k):
             self.held.add(k)
             desktop.set_keys(self._mask())
         # One-shots still go through key(); none of them drive movement, so
         # the engine's 0.3s held-timer fallback cannot make anything sticky.
-        u = _ONESHOT.get(k)
-        if u is not None:
-            self.app.key(u, 0, 0)
+        u = desktop.bind_oneshot(k)
+        if u:
+            app.key(u, 0, 0)
 
     def _up(self, ev):
         self.held.discard(ev.keysym)
@@ -3193,6 +3660,9 @@ class Window:
         if not self.running:
             return
         self._frame_once()
+        if getattr(self.app, "quit", False):   # Menu -> Quit
+            self._close()
+            return
         self.root.after(1, self._frame)
 
     def _frame_once(self):

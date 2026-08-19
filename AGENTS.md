@@ -5,7 +5,7 @@ this repository, whatever the task. It is the sibling of
 [UnoDOS's `AGENTS.md`](https://github.com/hmofet/unodos/blob/master/AGENTS.md)
 and follows the same shape deliberately, so an agent that knows one knows both.
 
-Duum is small — one engine file, one rasteriser, a host, a frontend, four
+Duum is small — one engine file, one rasteriser, a host, a frontend, five
 gates. The risk here is therefore not merge collision between many agents; it
 is **silently breaking a port you cannot see from this checkout**. Two contracts
 leave this repository and are compiled into other people's code (§2). Most of
@@ -63,6 +63,21 @@ Every port implements exactly this. **Adding an optional call** (probed with
 `hasattr`, with a fallback when it is absent) is fine and needs no coordination.
 **Changing or requiring one** breaks every port at once.
 
+The menu added five optional calls this way, and they are the pattern to copy:
+
+```
+pref_get(name) / pref_set(name, value)      remember a setting
+bind_name(action)                           what key is on this action
+bind_set(action, ...) / bind_reset()        change it
+```
+
+A host with none of them still plays the entire game; the Controls screen just
+says the platform cannot remap keys, which is true and is better than offering
+a control that would silently do nothing. Note what is NOT in that list: the
+engine never learns what a key is CALLED. Naming keys is the host's job,
+because a tkinter keysym and a UnoDOS scancode have nothing in common, and
+capture ("press a key now") therefore happens in the frontend.
+
 ### The span-writer surface (`duum/raster.py`)
 
 ```
@@ -96,8 +111,11 @@ exists so that when it does not, the seams are already named.
 | engine (BSP walk, clipping, texturing, game logic, collision) | `duum/engine.py` | the big one; MicroPython-compatible subset |
 | reference rasteriser | `duum/raster.py` | **contract** — see §2 |
 | platform surface + desktop host | `duum/hostapi.py`, `duum/hosts/` | **contract** — see §2 |
-| frontend | `duum/frontends/tkwin.py`, `duum/__main__.py` | desktop only; no port sees this |
-| gates | `tools/duum_verify.py`, `tools/duum_golden.py`, `tools/duum_collide.py` | `duum_verify` shares no code with the engine ON PURPOSE — never "simplify" it by importing from `duum.engine` |
+| frontend | `duum/frontends/tkwin.py`, `duum/__main__.py` | desktop only; no port sees this. It must NOT keep its own idea of what a key means — that lives in the host, or it drifts, which is how left and right ended up swapped |
+| menu, options, FPS counter | `menu_*` / `draw_menu` in `duum/engine.py` | drawn with `fill_rect` and `text` only, so every port gets it free |
+| bindings + settings file | `duum/hosts/desktop.py` | the host names keys, because a tkinter keysym means nothing on the device |
+| the app icon | `packaging/icon.py`, `packaging/icons/` | generated; regenerate in the same commit as a change to the drawing |
+| gates | `tools/duum_verify.py`, `tools/duum_golden.py`, `tools/duum_collide.py`, `tests/input_menu.py` | `duum_verify` shares no code with the engine ON PURPOSE — never "simplify" it by importing from `duum.engine` |
 | build + packaging | `tools/build.py`, `packaging/build_exe.py` | |
 | generated distributions | `dist/desktop/duum.py`, `dist/unodos/DUUM.PY` | **generated — never hand-edit** (§4) |
 
@@ -131,6 +149,7 @@ Before landing anything, from a checkout with a WAD:
 python tools/duum_verify.py --wad DOOM1.WAD           # must be 0 failing views
 python tools/duum_golden.py check --wad DOOM1.WAD     # must be N/N identical
 python tools/duum_collide.py --wad DOOM1.WAD          # must be 4/4 checks
+python tests/input_menu.py DOOM1.WAD                 # must be 0 failed
 python tools/build.py --check DOOM1.WAD               # distributions rebuild + render
 python tests/smoke_window.py DOOM1.WAD                # the frontend actually runs
 ```
@@ -156,6 +175,11 @@ What each one is for, because they are not interchangeable:
   asserts about movement instead: a scripted walk into a known wall, 36,000
   randomised moves that may not cross a one-sided linedef, every use-door in the
   episode, and a rocket fired at a wall.
+- **`input_menu` is the input gate.** It needs no display, and it asks the one
+  question no rendering test can: what does this key actually DO? Left and
+  right were swapped in every shipped build until it existed. It asserts
+  direction against strafing rather than against the view angle, because
+  "pa went up" is only meaningful if you already agree which way up is.
 - Gameplay changes not covered by it (combat, pickups, monster behaviour) are
   outside all three by nature — the oracle renders, it does not simulate. Land
   those with a **scripted reproduction** in the commit message: a map, a spawn

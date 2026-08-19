@@ -14,24 +14,30 @@ import tkinter
 from ..raster import Canvas
 from ..hosts import desktop
 
-# Held-key bitmap, matching the device's UNO_KH_* bits.  Movement, strafing
-# and fire are read from this every tick, so they are exact: pressed means
-# pressed, released means released.
-_BITS = {
-    "Up": 1, "w": 1,
-    "Down": 2, "s": 2,
-    "Left": 4, "a": 4,
-    "Right": 8, "d": 8,
-    "f": 16, "Control_L": 16, "Control_R": 16,
-    "space": 32, "e": 32,
-    "comma": 64, "q": 64,
-    "period": 128, "x": 128,
-}
+# What a physical key DOES now lives in the host (duum/hosts/desktop.py), so
+# that the engine's Controls screen can change it and so that this file and
+# the config file cannot disagree about it.  This module only has to turn a Tk
+# event into something the host or the engine understands.
+#
+# It used to keep its own table, and got it wrong: it assumed the held-key bits
+# ran up/down/left/right, when they follow the DEVICE's scancodes (Up=1 Down=2
+# Right=3 Left=4), so bit 4 is RIGHT.  Left and right were swapped on the arrow
+# keys and on A/D for as long as that table existed.
 
-# Keys the engine wants as one-shot events rather than as held state: the
-# weapon digits, and the any-key that restarts after death or an exit.
-_ONESHOT = {"1": 49, "2": 50, "3": 51, "4": 52, "5": 53, "6": 54,
-            "space": 32, "Return": 13}
+# Keysym -> (unicode, scancode) for the keys the engine reads as events: menu
+# navigation, and Escape to open it.  Scancodes are the device's.
+_RAW = {"Up": (0, 1), "Down": (0, 2), "Right": (0, 3), "Left": (0, 4),
+        "Return": (13, 0), "KP_Enter": (13, 0), "Escape": (27, 0),
+        "space": (32, 0)}
+
+
+def _raw(ev):
+    """A Tk key event as the (uni, scan, ctrl) the engine's key() takes."""
+    r = _RAW.get(ev.keysym)
+    if r is not None:
+        return r[0], r[1], 0
+    ch = ev.char
+    return (ord(ch) if len(ch) == 1 else 0), 0, 0
 
 
 class Window:
@@ -64,22 +70,37 @@ class Window:
     def _mask(self):
         m = 0
         for k in self.held:
-            m |= _BITS.get(k, 0)
+            m |= desktop.bind_mask(k)
         return m
 
     def _down(self, ev):
         k = ev.keysym
-        if k == "Escape":
-            self._close()
+        app = self.app
+
+        # Rebinding: the engine asked for a key and this is it.  Capture stays
+        # a FRONTEND job on purpose - the engine has no business knowing that
+        # this platform calls a key "Control_L".
+        if getattr(app, "capture", None) is not None:
+            app.capture_done(desktop.bind_set(app.capture, k))
             return
-        if k in _BITS:
+
+        # Menu up: everything is navigation, nothing is movement.
+        if app.wants_raw():
+            uni, scan, ctrl = _raw(ev)
+            app.key(uni, scan, ctrl)
+            return
+
+        if k == "Escape":
+            app.key(27, 0, 0)                 # opens the menu
+            return
+        if desktop.bind_mask(k):
             self.held.add(k)
             desktop.set_keys(self._mask())
         # One-shots still go through key(); none of them drive movement, so
         # the engine's 0.3s held-timer fallback cannot make anything sticky.
-        u = _ONESHOT.get(k)
-        if u is not None:
-            self.app.key(u, 0, 0)
+        u = desktop.bind_oneshot(k)
+        if u:
+            app.key(u, 0, 0)
 
     def _up(self, ev):
         self.held.discard(ev.keysym)
@@ -97,6 +118,9 @@ class Window:
         if not self.running:
             return
         self._frame_once()
+        if getattr(self.app, "quit", False):   # Menu -> Quit
+            self._close()
+            return
         self.root.after(1, self._frame)
 
     def _frame_once(self):
