@@ -198,3 +198,45 @@ them. If that is more than pc64 wants right now, **implementing only
 
 Nothing here is claimed downstream and nothing is urgent. Filed so the device
 side can plan it rather than discover it.
+
+## 2026-08-19, NOTE: session close, sound
+
+Claim released. Landed on `master`, gates green:
+
+| | |
+|---|---|
+| the two bugs under the claim | `5f34575` |
+| golden baselines can no longer be committed | `acfd8fc` |
+| the WAD's sound effects, and `audio_gate` | `24529fd` |
+| the desktop mixer, and the two beep bugs | `ce48edd` |
+| MUS to Standard MIDI | `8aba000` |
+| the desktop MIDI player | `3274240` |
+| the pc64 request | `02aca3f` |
+| `build.sh` from a clean checkout | `9bfd944` |
+| the web port's samples and score | `a75ab63` |
+| the porting surface, in README | `76442df` |
+
+**Measured, not assumed.** The machine this was written on has no audio output
+at all (`waveOutGetNumDevs` is 0: it is a VM with no render endpoint), which is
+why `audio_gate` asserts about calls and samples rather than about sound, and
+why everything audible was verified on `mini`, which is bare metal:
+
+- effects: `waveOutGetPosition` advanced 110,440 bytes, 2.50 s of stereo, 240
+  of 241 mixer blocks non-silent, peak 13,185 of 32,767. That counter is kept
+  by the driver from what it consumed, so it cannot move without real samples
+  reaching the DAC.
+- music: note-ons counted as they were sent against the score's own schedule,
+  exact at 2, 4, 6, 8 and 10 seconds, with per-note drift inside 11 ms.
+- the web port: built in the pinned emsdk container on `quill`; the engine
+  handed the page a 23,393 byte `MThd` and DSPISTOL's exact 5,661 samples.
+
+**Open, and not something another gate can close:** none of this has been heard
+on pc64 hardware, because pc64 implements none of the four calls yet (the
+REQUEST above). The device still beeps, exactly as before, which is the
+fallback working rather than a regression.
+
+**One thing worth knowing if you touch the desktop host:** its sound is two
+threads, one for the mixer and one for the score. Neither touches engine
+state; they read a sample list and an event list that are built before the
+thread starts. Keep it that way, or the engine acquires a lock on its hot path
+for the sake of a gunshot.
