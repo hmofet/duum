@@ -5,7 +5,7 @@ this repository, whatever the task. It is the sibling of
 [UnoDOS's `AGENTS.md`](https://github.com/hmofet/unodos/blob/master/AGENTS.md)
 and follows the same shape deliberately, so an agent that knows one knows both.
 
-Duum is small: one engine file, one rasteriser, a host, a frontend, five
+Duum is small: one engine file, one rasteriser, a host, a frontend, six
 gates. The risk here is therefore not merge collision between many agents; it
 is **silently breaking a port you cannot see from this checkout**. Two contracts
 leave this repository and are compiled into other people's code (§2). Most of
@@ -71,6 +71,13 @@ bind_name(action)                           what key is on this action
 bind_set(action, ...) / bind_reset()        change it
 ```
 
+A host with none of them still plays the entire game; the Controls screen just
+says the platform cannot remap keys, which is true and is better than offering
+a control that would silently do nothing. Note what is NOT in that list: the
+engine never learns what a key is CALLED. Naming keys is the host's job,
+because a tkinter keysym and a UnoDOS scancode have nothing in common, and
+capture ("press a key now") therefore happens in the frontend.
+
 Sound added four more, on the same terms:
 
 ```
@@ -86,13 +93,6 @@ only thing that knows what audio hardware is underneath it and a frame loop is
 not a good enough clock for music. A host that implements none of this still
 gets every sound as a `beep()`, which is what Duum did for its whole life until
 2026-08-19.
-
-A host with none of them still plays the entire game; the Controls screen just
-says the platform cannot remap keys, which is true and is better than offering
-a control that would silently do nothing. Note what is NOT in that list: the
-engine never learns what a key is CALLED. Naming keys is the host's job,
-because a tkinter keysym and a UnoDOS scancode have nothing in common, and
-capture ("press a key now") therefore happens in the frontend.
 
 ### The span-writer surface (`duum/raster.py`)
 
@@ -131,8 +131,8 @@ exists so that when it does not, the seams are already named.
 | menu, options, FPS counter | `menu_*` / `draw_menu` in `duum/engine.py` | drawn with `fill_rect` and `text` only, so every port gets it free |
 | bindings + settings file | `duum/hosts/desktop.py` | the host names keys, because a tkinter keysym means nothing on the device |
 | the app icon | `packaging/icon.py`, `packaging/icons/` | generated; regenerate in the same commit as a change to the drawing |
-| gates | `tools/duum_verify.py`, `tools/duum_golden.py`, `tools/duum_collide.py`, `tests/input_menu.py` | `duum_verify` shares no code with the engine ON PURPOSE, so never "simplify" it by importing from `duum.engine` |
-| web port | `ports/web/` | MicroPython + the C canvas, compiled to wasm. Consumes both contracts; changes neither. Embeds `dist/unodos/DUUM.PY` verbatim, so an engine change reaches it by rebuilding, not by editing. |
+| gates | `tools/duum_verify.py`, `tools/duum_golden.py`, `tools/duum_collide.py`, `tests/input_menu.py`, `tests/audio_gate.py` | `duum_verify` shares no code with the engine ON PURPOSE, so never "simplify" it by importing from `duum.engine` |
+| web port | `ports/web/` | MicroPython + the C canvas, compiled to wasm. Consumes both contracts; changes neither. Its own checks are `check_binds.py`, `check_audio.py` and `test_audio.mjs`, which catch drift the gates above structurally cannot see. Embeds `dist/unodos/DUUM.PY` verbatim, so an engine change reaches it by rebuilding, not by editing. |
 | build + packaging | `tools/build.py`, `packaging/build_exe.py` | |
 | generated distributions | `dist/desktop/duum.py`, `dist/unodos/DUUM.PY` | **generated, never hand-edit** (§4) |
 
