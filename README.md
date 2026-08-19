@@ -153,6 +153,13 @@ no holes, no overdraw. It must report **0 failing views**.
 check you want when optimising: "looks the same" is not good enough, and it
 catches a one-pixel drift.
 
+## Working on Duum
+
+[`AGENTS.md`](AGENTS.md) is the working agreement for anyone — human or agent —
+changing this repository: the two contracts that leave it (the platform surface
+and the span-writer surface), what is generated, the gates a change has to pass,
+and how fixes reach the ports. Read it before the first edit.
+
 ## Licence and credits
 
 Duum is licensed under the **Mozilla Public License 2.0** — see
