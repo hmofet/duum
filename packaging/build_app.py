@@ -62,6 +62,60 @@ def version():
     return "0"
 
 
+def tk_version():
+    """(major, minor) of the Tk this interpreter would bundle, or None.
+
+    Asked in a subprocess because creating a Tk root is not something to do
+    inside a build script that may be running with no window server.
+    """
+    code = ("import tkinter;r=tkinter.Tk();"
+            "print(r.tk.call('info','patchlevel'));r.destroy()")
+    try:
+        out = subprocess.run([sys.executable, "-c", code],
+                             capture_output=True, text=True, timeout=60)
+    except Exception:
+        return None
+    txt = out.stdout.strip().split("\n")[-1] if out.stdout.strip() else ""
+    bits = txt.split(".")
+    if len(bits) < 2 or not bits[0].isdigit() or not bits[1].isdigit():
+        return None
+    return (int(bits[0]), int(bits[1]))
+
+
+def check_tk():
+    """Refuse to build against Apple's system Tcl/Tk.
+
+    THE BUG THIS EXISTS FOR.  macOS still ships Tcl/Tk 8.5.9, from 2010, and
+    the Xcode command line tools' python3 links against it.  A bundle built
+    that way passes every check worth running - it launches, it registers with
+    LaunchServices, it renders frames at full tilt, and the photo image really
+    does contain the right pixels - and then shows a BLANK WHITE WINDOW,
+    because Apple's 8.5 does not present them.  Nothing about that failure is
+    visible from a build log, which is why this is a hard stop rather than a
+    warning: the first macOS build shipped exactly that way.
+
+    python.org has warned against the Apple-supplied Tcl/Tk for years.  Any
+    Python carrying its own 8.6 or later is fine, and it also makes the bundle
+    self-contained rather than dependent on a deprecated system framework.
+    """
+    v = tk_version()
+    if v is None:
+        print("  WARNING: could not determine the Tk version; building anyway")
+        return
+    print("  Tk version: %d.%d" % v)
+    if v < (8, 6):
+        sys.exit(
+            "\nRefusing to build against Tk %d.%d.\n\n"
+            "This is Apple's system Tcl/Tk, and a bundle built against it\n"
+            "launches, renders, and shows a blank white window.  It is the\n"
+            "one failure this script can detect and you cannot.\n\n"
+            "Build with a Python that carries its own Tk 8.6 or later:\n"
+            "  a python.org installer, or\n"
+            "  uv python install 3.12  (then use that interpreter)\n\n"
+            "packaging/mac/make-dmg.sh picks a suitable one automatically;\n"
+            "override it with PYTHON=/path/to/python3.\n" % v)
+
+
 def pick_identity():
     """The best signing identity this session can actually reach.
 
@@ -121,6 +175,9 @@ def main():
         import PyInstaller                                  # noqa: F401
     except ImportError:
         sys.exit("PyInstaller is not installed.  pip install pyinstaller")
+
+    print("  building with: %s" % sys.executable)
+    check_tk()
 
     # The icon is generated, not committed as a binary: packaging/icon.py draws
     # it from a handful of ellipses with zlib and struct, so there is one
