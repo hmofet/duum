@@ -118,9 +118,17 @@ const char *duum_text_str(int i)
 /* ---- input ----------------------------------------------------------------
  * The held-key bitmap uses the device's UNO_KH_* bits, because that is what
  * the engine reads through uno.keys_down():
- *   1 up  2 down  4 left  8 right  16 fire  32 use  64 strafeL  128 strafeR
- * One-shot keys (the weapon digits, and the any-key that restarts after death)
- * go through app.key() instead, exactly as on the device. */
+ *
+ *   1 up  2 down  4 turn RIGHT  8 turn LEFT  16 fire  32 use
+ *   64 strafeL  128 strafeR
+ *
+ * RIGHT BEFORE LEFT IS NOT A TYPO, and it is worth the shout because this file
+ * used to say otherwise: the bits follow the DEVICE's scancodes (Up=1 Down=2
+ * Right=3 Left=4) through the engine's KDBITS, so bit 4 is scancode 3, which
+ * is RIGHT. Every frontend that assumed the obvious order shipped with the
+ * arrow keys swapped, this port included, until upstream found it.
+ *
+ * One-shot keys go through app.key() instead, exactly as on the device. */
 EMSCRIPTEN_KEEPALIVE
 void duum_set_keys(int mask) { g_keys = mask; }
 
@@ -226,18 +234,41 @@ int duum_frame(void)
     return -2;
 }
 
-/* A one-shot key press: the weapon digits, and the any-key that restarts.
+/* True while the menu (or a key-capture prompt) owns the keyboard, in which
+ * case the page must forward every press as an EVENT rather than as held
+ * state. The engine draws that distinction, not the page: movement arrives as
+ * a bitmap because key() marks a key held for 0.3 s, which would make walking
+ * sticky - and while the menu is up nothing is walking. */
+EMSCRIPTEN_KEEPALIVE
+int duum_wants_raw(void)
+{
+    if (!g_booted || g_dead) return 0;
+    int out = 0;
+    nlr_buf_t nlr;
+    if (nlr_push(&nlr) == 0) {
+        out = mp_obj_is_true(mp_call_function_0(
+                  mp_load_attr(g_app, MP_QSTR_wants_raw)));
+        nlr_pop();
+    }
+    return out;
+}
+
+/* A key press as an event: (uni, scan, ctrl), exactly the triple the engine's
+ * key() takes. scan carries the DEVICE's scancodes (1 up, 2 down, 3 right,
+ * 4 left), which is how the menu navigates; uni carries 27 for Esc, 13 for
+ * Enter, and the character otherwise.
+ *
  * Fenced separately from the frame so a handler that raises reports itself
  * rather than being blamed on the next draw. */
 EMSCRIPTEN_KEEPALIVE
-int duum_key(int uni)
+int duum_key(int uni, int scan, int ctrl)
 {
     if (!g_booted || g_dead) return -1;
     nlr_buf_t nlr;
     if (nlr_push(&nlr) == 0) {
         mp_obj_t args[3] = { MP_OBJ_NEW_SMALL_INT(uni),
-                             MP_OBJ_NEW_SMALL_INT(0),
-                             MP_OBJ_NEW_SMALL_INT(0) };
+                             MP_OBJ_NEW_SMALL_INT(scan),
+                             MP_OBJ_NEW_SMALL_INT(ctrl) };
         mp_call_function_n_kw(mp_load_attr(g_app, MP_QSTR_key), 3, 0, args);
         nlr_pop();
         return 0;

@@ -131,23 +131,50 @@ function readLocal(file) {
 
 // ---- input -----------------------------------------------------------------
 // The bitmap matches the device's UNO_KH_* bits, which is what the engine reads
-// through uno.keys_down().
+// through uno.keys_down():
+//
+//   1 up  2 down  4 turn RIGHT  8 turn LEFT  16 fire  32 use
+//   64 strafeL  128 strafeR
+//
+// RIGHT BEFORE LEFT IS NOT A TYPO. The bits follow the DEVICE's scancodes
+// (Up=1 Down=2 Right=3 Left=4) through the engine's KDBITS, so bit 4 is
+// scancode 3, which is RIGHT. This file assumed the obvious order and shipped
+// with left and right swapped, which is the same bug the tkinter frontend had
+// for as long as it kept its own table. A frontend has to keep one - the
+// browser names keys, the engine names actions - so the table is fine; getting
+// the bit values from anywhere other than this comment is not.
 
 const BITS = {
     ArrowUp: 1, KeyW: 1,
     ArrowDown: 2, KeyS: 2,
-    ArrowLeft: 4, KeyA: 4,
-    ArrowRight: 8, KeyD: 8,
+    ArrowRight: 4, KeyD: 4,
+    ArrowLeft: 8, KeyA: 8,
     ControlLeft: 16, ControlRight: 16, KeyF: 16,
     Space: 32, KeyE: 32,
     Comma: 64, KeyQ: 64,
     Period: 128, KeyX: 128,
 };
 
-// One-shots: the weapon digits, and the any-key that restarts after death.
+// One-shots: the weapon digits, the any-key that restarts after death, and
+// Escape.
+//
+// Escape has to be here as well as in RAW below, and leaving it out is a real
+// bug that shipped for an afternoon: RAW is consulted only once the menu is
+// ALREADY up, so a key that is not also a one-shot never reaches the engine
+// while the game is running - and Escape while the game is running is the only
+// thing that opens the menu in the first place. It looked like the menu simply
+// did not exist.
 const ONESHOT = {
     Digit1: 49, Digit2: 50, Digit3: 51, Digit4: 52, Digit5: 53, Digit6: 54,
-    Space: 32, Enter: 13,
+    Space: 32, Enter: 13, Escape: 27,
+};
+
+// The same keys read as engine EVENTS, for when the menu owns the keyboard:
+// (unicode, device scancode). The menu navigates on the scancodes and acts on
+// uni 13 or 32, and Esc (27) is what opens it in the first place.
+const RAW = {
+    ArrowUp: [0, 1], ArrowDown: [0, 2], ArrowRight: [0, 3], ArrowLeft: [0, 4],
+    Enter: [13, 0], NumpadEnter: [13, 0], Escape: [27, 0], Space: [32, 0],
 };
 
 const held = new Set();
@@ -162,12 +189,29 @@ function onKeyDown(e) {
     if (!booted) return;
     // Only swallow keys the game actually uses, so browser shortcuts and tab
     // navigation still work for anyone who needs them.
-    const uses = (e.code in BITS) || (e.code in ONESHOT);
+    const uses = (e.code in BITS) || (e.code in ONESHOT) || (e.code in RAW);
     if (!uses) return;
     e.preventDefault();
     if (e.repeat) return;
-    if (e.code in BITS) { held.add(e.code); worker.postMessage({ t: "keys", mask: mask() }); }
-    if (e.code in ONESHOT) worker.postMessage({ t: "key", uni: ONESHOT[e.code] });
+    if (e.code in BITS) held.add(e.code);
+    const raw = RAW[e.code] || [0, 0];
+    // Both readings go over at once and the worker picks, because only the
+    // engine knows whether the menu is up. A printable key that is not in RAW
+    // still needs a unicode value, or typing in the menu would do nothing.
+    worker.postMessage({
+        t: "kdown",
+        uni: raw[0] || printable(e),
+        scan: raw[1],
+        ctrl: e.ctrlKey ? 1 : 0,
+        oneshot: ONESHOT[e.code] || 0,
+        mask: mask(),
+    });
+}
+
+// A single character's code point, for keys the menu might want to read
+// directly. e.key is one character for a printable key and a name otherwise.
+function printable(e) {
+    return (e.key && e.key.length === 1) ? e.key.charCodeAt(0) : 0;
 }
 
 function onKeyUp(e) {
@@ -175,7 +219,7 @@ function onKeyUp(e) {
     if (!(e.code in BITS)) return;
     e.preventDefault();
     held.delete(e.code);
-    worker.postMessage({ t: "keys", mask: mask() });
+    worker.postMessage({ t: "kup", mask: mask() });
 }
 
 // A window that loses focus mid-stride would otherwise keep the last key held

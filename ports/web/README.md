@@ -54,7 +54,7 @@ stage.py          assembles the deployable bundle
 web/              the page: index.html, duum.js, duum-worker.js
 ```
 
-## The four things that will bite
+## The six things that will bite
 
 ### 1. The GC cannot scan the C stack, because on wasm there is no C stack to scan
 
@@ -102,7 +102,37 @@ Note that the two stack limits measure different things: MicroPython's counts
 emscripten's shadow stack, while what actually fails is the host call stack. The
 margin between them is deliberately loose rather than snug.
 
-### 4. Name the wasm module something the page is not already called
+### 4. The key bits are not in the order they look like
+
+The held-key bitmap follows the **device's scancodes** (Up=1 Down=2 Right=3
+Left=4), so **bit 4 is turn RIGHT and bit 8 is turn LEFT**. Every frontend that
+assumed the obvious order has shipped with the arrow keys swapped: the tkinter
+one did for as long as it kept its own table, and so did this page, copied from
+a comment that was itself wrong.
+
+A frontend has to keep a table - the browser names keys, the engine names
+actions, and nothing bridges those automatically - so the answer is not to
+remove it but to check it. `check_binds.py` compares the page's table against
+`duum/hosts/desktop.py`'s DEFAULT_BINDS and fails on any disagreement. Run it
+with the other gates; it is instant and it is the only thing that can see this
+class of bug, which is invisible in a screenshot and survives every rendering
+check.
+
+### 5. Escape has to be a one-shot AND a raw key
+
+While the menu is up the engine wants every press as an EVENT rather than as
+held state, and says so through `app.wants_raw()`. The page therefore sends
+both readings of each key and the worker branches on `wants_raw()`, next to the
+engine, rather than asking across the thread boundary per keystroke.
+
+The trap: `RAW` is only consulted once the menu is **already** up, so a key
+that is not also a one-shot never reaches the engine while the game is running.
+Escape while the game is running is the only thing that opens the menu, so
+leaving it out of `ONESHOT` means the menu appears not to exist at all. The
+headless gate cannot catch this, because it calls `duum_key()` directly and
+never goes through the page's routing; it took a browser and a screenshot.
+
+### 6. Name the wasm module something the page is not already called
 
 The emscripten output and the page script were both `duum.js`, so the worker's
 `import("./duum.js")` resolved to the page instead of the runtime and reported
@@ -185,11 +215,21 @@ directory has to prove is that the port renders what the engine meant:
 ```bash
 node test_headless.mjs ~/freedoom1.wad 300      # and again with a still camera
 node test_headless.mjs ~/freedoom1.wad 300 "" 0
+python check_binds.py                            # the key table vs the engine's
 ```
 
 It boots, renders, and then checks the frame is neither blank nor a single flat
 colour - the check worth having, because "it rendered without an exception" does
 not distinguish a working renderer from a broken one that cleared the screen.
+
+It also opens the pause menu, moves a row and closes it, checking the pixels
+change each time. The menu is the one part of the engine that reads keys as
+events and navigates on device scancodes, which is two chances to wire a port
+up wrongly and neither of them shows in an ordinary frame.
+
+**What the headless gate cannot see is the page's own key routing**, because it
+calls into the module directly. That path needs a browser; trap 5 above is what
+happens when it does not get one.
 
 Pass a fourth argument to write a PPM out and look at it. There is also
 `window.duumSnap()` on the page, which returns a PNG of exactly what is on

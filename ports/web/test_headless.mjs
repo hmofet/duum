@@ -60,6 +60,8 @@ const log       = c("duum_log", "string", []);
 const setKeys   = c("duum_set_keys", null, ["number"]);
 const textCount = c("duum_text_count", "number", []);
 const textStr   = c("duum_text_str", "string", ["number"]);
+const key       = c("duum_key", "number", ["number", "number", "number"]);
+const wantsRaw  = c("duum_wants_raw", "number", []);
 
 // ---- 1. load the WAD ------------------------------------------------------
 const wad = readFileSync(wadPath);
@@ -127,6 +129,39 @@ for (let i = 0; i < W * H; i++) {
 console.log(`pixels: ${nonBlack}/${W * H} non-black, ${seen.size} distinct colours`);
 if (nonBlack === 0) fail("the frame is entirely black");
 if (seen.size < 16) fail(`only ${seen.size} distinct colours: this is not a rendered scene`);
+
+// ---- 5. the pause menu ----------------------------------------------------
+// The menu is the only part of the engine that reads keys as EVENTS rather
+// than as held state, and it navigates on the DEVICE's scancodes. That is two
+// chances to wire a port up wrongly, and neither shows up in a rendered frame,
+// so it is checked here rather than left to be noticed by a player.
+const snapshot = () => {
+    const p = fbPtr();
+    return Buffer.from(Module.HEAPU8.subarray(p, p + W * H * 4)).toString("base64");
+};
+
+if (wantsRaw() !== 0) fail("wants_raw is true before the menu was opened");
+const beforeMenu = snapshot();
+
+key(27, 0, 0);                       // Esc opens it
+if (wantsRaw() !== 1) fail("Esc did not open the menu (wants_raw still false)");
+if (frame() !== 0) fail(`the frame after opening the menu raised
+${log()}`);
+const menuUp = snapshot();
+if (menuUp === beforeMenu) fail("the menu is open but drew nothing");
+
+key(0, 2, 0);                        // scancode 2 = down, one row
+if (frame() !== 0) fail(`the frame after moving down the menu raised
+${log()}`);
+const moved = snapshot();
+if (moved === menuUp) fail("moving down the menu changed no pixels: " +
+                           "the scancodes are probably not reaching the engine");
+
+key(27, 0, 0);                       // Esc again closes it
+if (wantsRaw() !== 0) fail("Esc did not close the menu");
+if (frame() !== 0) fail(`the frame after closing the menu raised
+${log()}`);
+console.log("menu: opens, navigates and closes on Esc/scancodes  ok");
 
 const texts = [];
 for (let i = 0; i < textCount(); i++) texts.push(textStr(i));

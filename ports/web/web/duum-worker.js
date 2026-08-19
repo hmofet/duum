@@ -46,7 +46,8 @@ function wrap() {
         appErr:    c("duum_app_err",    "string", []),
         log:       c("duum_log",        "string", []),
         setKeys:   c("duum_set_keys",   null,     ["number"]),
-        key:       c("duum_key",        "number", ["number"]),
+        key:       c("duum_key",        "number", ["number","number","number"]),
+        wantsRaw:  c("duum_wants_raw",  "number", []),
         textCount: c("duum_text_count", "number", []),
         textX:     c("duum_text_x",     "number", ["number"]),
         textY:     c("duum_text_y",     "number", ["number"]),
@@ -169,8 +170,22 @@ self.onmessage = (e) => {
         case "start":  start(m).catch((err) =>
                            post({ t: "error", msg: String(err && err.message || err) }));
                        break;
+        // Whether a press is movement or menu navigation is the ENGINE's
+        // distinction, not the page's, so the page sends both readings of
+        // every key event and the branch happens here, next to the engine.
+        // Asking across the thread boundary first would be a round trip per
+        // keystroke, and the answer can change between the question and the
+        // press.
+        case "kdown":  if (!api) break;
+                       if (api.wantsRaw()) {
+                           api.key(m.uni, m.scan, m.ctrl);
+                       } else {
+                           api.setKeys(m.mask);
+                           if (m.oneshot) api.key(m.oneshot, 0, 0);
+                       }
+                       break;
+        case "kup":    if (api && !api.wantsRaw()) api.setKeys(m.mask); break;
         case "keys":   if (api) api.setKeys(m.mask); break;
-        case "key":    if (api) api.key(m.uni); break;
         case "scale":  if (ctx) { applyScale(m.scale); present(); } break;
         // A PNG of exactly what is on screen, taken on the worker because the
         // worker owns the canvas: once transferControlToOffscreen has been
