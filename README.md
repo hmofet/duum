@@ -133,19 +133,34 @@ The platform surface is deliberately tiny: `size`, `read_at`, `beep`,
 `quiet`, optional `ticks` and `keys_down`, and an `App` base class. That is
 the entire list of things a port has to provide.
 
-Five more are optional, and a port that supplies none of them still plays the
+Nine more are optional, and a port that supplies none of them still plays the
 whole game:
 
 ```
 pref_get(name) / pref_set(name, value)      remember a setting
 bind_name(action)                           what key is on this action
 bind_set(action, ...) / bind_reset()        change it
+
+sfx_load(slot, pcm, rate)                   keep a sample under `slot`
+sfx_play(slot, vol, sep)                    play it, mixed with the rest
+mus_play(smf, loop) / mus_stop()            a whole Standard MIDI File
 ```
 
-They are what the menu's FPS toggle and Controls screen run on, and every one
-is probed with `hasattr`, so their absence is a smaller menu rather than a
-crash: the Controls screen says the platform cannot remap keys, which is true,
-and better than offering a control that would do nothing.
+The first five are what the menu's FPS toggle and Controls screen run on, and
+every one is probed with `hasattr`, so their absence is a smaller menu rather
+than a crash: the Controls screen says the platform cannot remap keys, which
+is true, and better than offering a control that would do nothing.
+
+The last four are sound, and they split the work the same way. The engine
+names the sound, reads it out of the WAD once, and works out how loud it is
+and how far to which side; the host mixes, synthesises and holds the clock,
+because only the host knows what audio hardware is under it and a frame loop
+is not a good enough clock for music. `pcm` is unsigned 8-bit mono straight
+out of a `DS` lump, `vol` is 0..255, and `sep` is 0 hard left through 255 hard
+right. `smf` is a Standard MIDI File the engine converts from the WAD's `MUS`
+lump when a level loads, so a platform that already has a MIDI player needs no
+new code to play the music. Implement none of it and every sound arrives as a
+`beep()`, which is what Duum did for its whole life until August 2026.
 
 Note what is *not* in that list. The engine never learns what a key is
 **called**. It names actions; naming keys is the host's job, because a tkinter
@@ -190,7 +205,7 @@ that three builds on one desk are still telling you which is which.
 
 ## Tests
 
-Four gates, all runnable against any IWAD:
+Five gates, all runnable against any IWAD:
 
 ```bash
 python tools/duum_verify.py --wad freedoom1.wad     # geometry oracle
@@ -198,6 +213,7 @@ python tools/duum_golden.py save --wad freedoom1.wad
 python tools/duum_golden.py check --wad freedoom1.wad
 python tools/duum_collide.py --wad freedoom1.wad    # collision, doors, rockets
 python tests/input_menu.py freedoom1.wad            # what keys do, and the menu
+python tests/audio_gate.py freedoom1.wad            # what the sound path plays
 python tests/smoke_window.py freedoom1.wad          # the frontend actually runs
 ```
 
@@ -220,6 +236,14 @@ table written in the obvious order swaps the arrows. It is asserted against
 strafing rather than against the view angle, because turning left and strafing
 left have to agree about which way left is, and that is a claim with no
 convention in it.
+
+`audio_gate.py` needs no audio device, which is the point: it asserts about
+the calls the engine makes, the samples it hands over and the score it
+converts, not about anything you can hear, so it runs the same on a build box
+or a VM with no DAC. It carries a Standard MIDI File reader that shares no
+code with the converter that writes them, and it asserts stereo separation
+against the engine's own strafe direction, for the same reason `input_menu.py`
+asserts turning against strafing.
 
 `duum_collide.py` is the one that is not about pixels. Both of the others take
 the player's position as an input, so they render a perfectly good frame from
