@@ -32,10 +32,21 @@ fi
 
 # mpy-cross is not needed (the engine ships as source and is compiled at
 # startup), so the container only has to run make and emcc.
+#
+# The REPOSITORY is mounted, not just this directory. The Makefile builds the
+# engine into a header from ../../dist/unodos/DUUM.PY, which lives outside
+# ports/web, so mounting only ports/web left that path resolving to /dist
+# inside the container and every fresh build stopped at:
+#
+#   make: *** No rule to make target '../../dist/unodos/DUUM.PY'
+#
+# One level up costs nothing and makes ./build.sh work from a clean checkout.
+ROOT=$(cd "$HERE/../.." && pwd)
+
 docker run --rm \
-    -v "$HERE:/src" \
+    -v "$ROOT:/src" \
     -u "$(id -u):$(id -g)" \
-    -w /src \
+    -w /src/ports/web \
     "$EMSDK_IMAGE" \
     make MPY_DIR=micropython "$@"
 
