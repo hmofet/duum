@@ -295,3 +295,47 @@ panning is real (`sep=0` gives L 5729 / R 0, `sep=255` its mirror), and five
 the REQUEST said was the missing piece. End to end with the real WAD:
 `have_sfx` and `have_mus` True, `err` None, one sample handed over on the
 first shot, and 46 of 65 captured seconds non-silent.
+
+## 2026-08-19, REPORT answered: a host can now decline politely
+
+Point 2 of the entry above is fixed in the engine, not just documented. It was
+a real hole: `sound()` returned after `sfx_play` whatever it answered, so a
+host that said False went MUTE instead of falling back to `beep()`, and only
+an exception ever reached the fallback line.
+
+`declined(r)` now decides, and the whole subtlety is in one case:
+
+| the host returns | what it means |
+|---|---|
+| `None` | it worked, or the host does not report |
+| `True` / `1` | it worked |
+| `False` / `0` | a TEMPORARY refusal |
+| raises | this host cannot play samples at all |
+
+**`None` has to mean success**, which is why the suggested "fall through when
+`sfx_play` returns falsy" is not quite what landed. Every host written before
+this contract mentioned return values returns `None`, the reference desktop
+one included, and plain falsiness would have made all of them beep on every
+sound and re-hand the samples over each time. `declined()` is therefore
+`r is not None and not r`, which still catches an explicit `0` from a C
+implementation that returns an int.
+
+A refusal is now temporary in both places, as pc64 uses it:
+
+- a refused `sfx_load` leaves the slot at state 0, so the next sound offers
+  the samples again;
+- a refused `sfx_play` puts the slot BACK to state 0, so the samples are
+  handed over again next time. That is what a bank which drops its least
+  recently played slot expects of a caller, and pc64's does.
+
+`hostapi.py` says all of this out loud now, including the trap: returning
+False from a host with no audio hardware looks polite and means "ask me
+again", so the game would ask forever and beep forever. Raise for that.
+
+Eleven checks in `tests/audio_gate.py` cover it, including the None case,
+`0`, that a refused sound still beeps, and that a refusal does not switch
+sample playback off permanently.
+
+**Nothing here needs a pc64 change.** Raising `OSError` for no-device and
+returning False only for transient refusals is exactly right and now matches
+what the engine does with those answers.

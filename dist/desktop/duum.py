@@ -1787,6 +1787,24 @@ MSND = {
     b"SKUL": ((), ("dmpain",), ("firxpl",), ("sklatk",), ("sklatk",)),
 }
 
+def declined(r):
+    """Did the host explicitly refuse to do that?
+
+    The subtle part is None.  A host that simply does the work and returns
+    nothing is the ordinary case, and is what every host written before this
+    contract said anything about return values does, the reference desktop one
+    included.  So None has to mean SUCCESS: testing plain falsiness, which is
+    the obvious way to write this, would make every one of those hosts fall
+    back to a beep on every sound and reload its samples each time.
+
+    Only an explicit False, or an explicit 0 from a C implementation that
+    returns an int, is a refusal.  A refusal is temporary by definition: a
+    host with no audio at all raises instead, and that is what turns the whole
+    path off.
+    """
+    return r is not None and not r
+
+
 # The distance model.  Full volume inside SND_FULL, silent past SND_MAX,
 # linear between: the two distances are the ones the specs give for Doom's
 # own clipping (1200 map units) and close-range cutoff (200).
@@ -2152,12 +2170,19 @@ class Duum(uno.App):
                     pcm, rate = self.sfx_lump(row[1])
                     if pcm is None:
                         self.sfx_state[i] = 2
+                    elif declined(uno.sfx_load(i, pcm, rate)):
+                        pass               # a refusal now, not forever
                     else:
-                        uno.sfx_load(i, pcm, rate)
                         self.sfx_state[i] = 1
                 if self.sfx_state[i] == 1:
-                    uno.sfx_play(i, vol, sep)
-                    return
+                    if not declined(uno.sfx_play(i, vol, sep)):
+                        return
+                    # The host would not play it: it has dropped the sample,
+                    # or every voice is busy.  Forget that the slot is loaded
+                    # so the next one hands the samples over again, which is
+                    # what a bank that evicts its least recently played slot
+                    # expects a caller to do.
+                    self.sfx_state[i] = 0
             except Exception:
                 self.have_sfx = False      # a host that throws has not got it
         self.snd(row[2], row[3])

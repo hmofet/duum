@@ -309,6 +309,67 @@ def main():
     check("and the beep is the note this event always made",
           deaf.beeps[:1] == [(row[2], row[3])], repr(deaf.beeps[:1]))
 
+    # ---- 5b. a host that says no politely ----------------------------------
+    # Reported from UnoDOS: returning False was the obvious way to implement an
+    # optional call, and it used to make the game go MUTE rather than fall back
+    # to beeps, because sound() returned after sfx_play whatever it answered.
+    # The trap in the fix is None: hosts that just do the work and return
+    # nothing must keep counting as success, or every one of them regresses.
+    check("None from a host means it worked", not engine.declined(None))
+    check("True means it worked", not engine.declined(True))
+    check("1 means it worked", not engine.declined(1))
+    check("False is a refusal", engine.declined(False))
+    check("0 is a refusal too (a C host returning an int)",
+          engine.declined(0))
+
+    class Refuses(Recorder):
+        """A host that takes the samples but will not play them."""
+
+        def sfx_play(self, slot, vol, sep):
+            self.played.append((slot, vol, sep))
+            return False
+
+    ref = Refuses(desktop)
+    engine.uno = ref
+    app2 = engine.Duum()
+    app2.build(Canvas(320, 200))
+    app2.load_level("E1M1")
+    app2.weapon = 2
+    app2.ammo[1] = 50
+    app2.refire_at = 0.0
+    ref.beeps = []
+    app2.try_fire()
+    check("a refused sound still beeps", ref.beeps != [],
+          "the game went silent instead of falling back")
+    check("and the host was asked to play it", ref.played != [])
+    # An evicting sample bank expects the caller to hand the samples back, so
+    # a refusal has to forget the slot rather than assume it is still loaded.
+    check("a refusal forgets the slot, so the next one reloads",
+          app2.sfx_state[engine.SFXI["pistol"]] == 0,
+          "state is %r" % app2.sfx_state[engine.SFXI["pistol"]])
+
+    class LoadRefuses(Recorder):
+        """A host that will not even take the samples right now."""
+
+        def sfx_load(self, slot, pcm, rate):
+            return False
+
+    lr = LoadRefuses(desktop)
+    engine.uno = lr
+    app3 = engine.Duum()
+    app3.build(Canvas(320, 200))
+    app3.load_level("E1M1")
+    app3.weapon = 2
+    app3.ammo[1] = 50
+    app3.refire_at = 0.0
+    lr.beeps = []
+    app3.try_fire()
+    check("a refused LOAD beeps too", lr.beeps != [])
+    check("and is not remembered as loaded",
+          app3.sfx_state[engine.SFXI["pistol"]] == 0)
+    check("a refusal does not switch sample playback off",
+          app3.have_sfx, "a temporary no became a permanent one")
+
     # ---- 6. an event nobody defined is quiet, not fatal --------------------
     engine.uno = rec
     rec.played = []

@@ -30,6 +30,22 @@
 # rather than refuse the call; nothing upstream can tell, and a missed
 # footstep is better than an exception in the middle of a frame.
 #
+# WHAT THE TWO SFX CALLS MAY RETURN, which matters more than it looks:
+#
+#   None   did it, or does not report.  Every host written before this was
+#          written does this, so it MUST mean success.
+#   False  a TEMPORARY refusal: no free voice, the slot was dropped, some
+#          other app holds the audio device.  The engine falls back to beep()
+#          for that one sound and hands the samples over again next time.
+#   raise  this host cannot play samples at all.  The engine gives up on the
+#          whole path and beeps from then on.
+#
+# The distinction is the one an implementer gets wrong: returning False from a
+# host that has no audio hardware looks like the polite thing to do, but it
+# means "try me again shortly", so the game would ask forever and beep
+# forever.  Raise for that.  UnoDOS/pc64 found this edge and raises OSError
+# when no PCM device probed; see the 2026-08-19 entries in DUUM-REQUESTS.md.
+#
 # smf is a whole Standard MIDI File, format 0, converted from the WAD's MUS
 # lump by the engine and handed over once when a level loads.  The host holds
 # the clock and the synthesiser, because a frame loop is not a good enough
