@@ -31,6 +31,11 @@
 unsigned long duum_now_ms(void);
 int           duum_keys_held(void);
 void          duum_beep(int midi, int ticks);
+void          duum_sfx_load(int slot, const uint8_t *pcm, int len,
+                            int rate);
+void          duum_sfx_play(int slot, int vol, int sep);
+void          duum_mus_play(const uint8_t *smf, int len, int loop);
+void          duum_mus_stop(void);
 
 /* ---- the current canvas rect ----------------------------------------------
  * On the device pyrt.c publishes this once per draw, so the engine's spans are
@@ -316,6 +321,42 @@ static MP_DEFINE_CONST_FUN_OBJ_2(beep_obj, m_beep);
 static mp_obj_t m_quiet(void) { duum_beep(0, 0); return mp_const_none; }
 static MP_DEFINE_CONST_FUN_OBJ_0(quiet_obj, m_quiet);
 
+/* uno.sfx_load(slot, pcm, rate) -> give the page a sample to keep, and
+ * uno.sfx_play(slot, vol, sep) -> play it. The engine loads a slot once, the
+ * first time it needs that sound, and only ever plays it after that, so this
+ * pair moves the WAD's own audio across without a copy per gunshot. */
+static mp_obj_t m_sfx_load(mp_obj_t slot, mp_obj_t pcm, mp_obj_t rate)
+{
+    mp_buffer_info_t b;
+    mp_get_buffer_raise(pcm, &b, MP_BUFFER_READ);
+    duum_sfx_load(mp_obj_get_int(slot), (const uint8_t *)b.buf, (int)b.len,
+                  mp_obj_get_int(rate));
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_3(sfx_load_obj, m_sfx_load);
+
+static mp_obj_t m_sfx_play(mp_obj_t slot, mp_obj_t vol, mp_obj_t sep)
+{
+    duum_sfx_play(mp_obj_get_int(slot), mp_obj_get_int(vol),
+                  mp_obj_get_int(sep));
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_3(sfx_play_obj, m_sfx_play);
+
+/* uno.mus_play(smf, loop) -> a whole Standard MIDI File, converted from the
+ * WAD's MUS lump by the engine when a level loads. */
+static mp_obj_t m_mus_play(mp_obj_t smf, mp_obj_t loop)
+{
+    mp_buffer_info_t b;
+    mp_get_buffer_raise(smf, &b, MP_BUFFER_READ);
+    duum_mus_play((const uint8_t *)b.buf, (int)b.len, mp_obj_get_int(loop));
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(mus_play_obj, m_mus_play);
+
+static mp_obj_t m_mus_stop(void) { duum_mus_stop(); return mp_const_none; }
+static MP_DEFINE_CONST_FUN_OBJ_0(mus_stop_obj, m_mus_stop);
+
 /* ---- uno.App base class (empty; the app subclasses it) -------------------- */
 static mp_obj_t app_make_new(const mp_obj_type_t *type, size_t n, size_t nkw,
                              const mp_obj_t *args) {
@@ -335,6 +376,10 @@ static const mp_rom_map_elem_t uno_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_keys_down), MP_ROM_PTR(&keys_down_obj) },
     { MP_ROM_QSTR(MP_QSTR_beep),      MP_ROM_PTR(&beep_obj) },
     { MP_ROM_QSTR(MP_QSTR_quiet),     MP_ROM_PTR(&quiet_obj) },
+    { MP_ROM_QSTR(MP_QSTR_sfx_load),  MP_ROM_PTR(&sfx_load_obj) },
+    { MP_ROM_QSTR(MP_QSTR_sfx_play),  MP_ROM_PTR(&sfx_play_obj) },
+    { MP_ROM_QSTR(MP_QSTR_mus_play),  MP_ROM_PTR(&mus_play_obj) },
+    { MP_ROM_QSTR(MP_QSTR_mus_stop),  MP_ROM_PTR(&mus_stop_obj) },
 };
 static MP_DEFINE_CONST_DICT(uno_globals, uno_globals_table);
 const mp_obj_module_t mp_module_uno = {

@@ -59,6 +59,38 @@ EM_JS(void, duum_js_beep, (int midi, int ticks), {
 });
 void duum_beep(int midi, int ticks) { duum_js_beep(midi, ticks); }
 
+/* Samples and music go the same way, and for the same reason: WebAudio is a
+ * better mixer and a better clock than anything worth writing in C here, and
+ * neither crossing is hot. A sample crosses once, the first time the engine
+ * plays it; a score crosses once, when a level loads.
+ *
+ * HEAPU8.slice COPIES out of the wasm heap, deliberately. A subarray would be
+ * a view, and the heap can grow and be replaced underneath it, so the page
+ * would be holding a window onto memory that has moved. */
+EM_JS(void, duum_js_sfx_load, (int slot, const uint8_t *pcm, int len,
+                               int rate), {
+    if (Module.duumSfxLoad)
+        Module.duumSfxLoad(slot, Module.HEAPU8.slice(pcm, pcm + len), rate);
+});
+EM_JS(void, duum_js_sfx_play, (int slot, int vol, int sep), {
+    if (Module.duumSfxPlay) Module.duumSfxPlay(slot, vol, sep);
+});
+EM_JS(void, duum_js_mus_play, (const uint8_t *smf, int len, int loop), {
+    if (Module.duumMusPlay)
+        Module.duumMusPlay(Module.HEAPU8.slice(smf, smf + len), loop);
+});
+EM_JS(void, duum_js_mus_stop, (void), {
+    if (Module.duumMusStop) Module.duumMusStop();
+});
+
+void duum_sfx_load(int slot, const uint8_t *pcm, int len, int rate)
+{ duum_js_sfx_load(slot, pcm, len, rate); }
+void duum_sfx_play(int slot, int vol, int sep)
+{ duum_js_sfx_play(slot, vol, sep); }
+void duum_mus_play(const uint8_t *smf, int len, int loop)
+{ duum_js_mus_play(smf, len, loop); }
+void duum_mus_stop(void) { duum_js_mus_stop(); }
+
 /* The engine's app object, held across calls from JavaScript.
  *
  * It MUST be a registered root rather than a plain C static. Between frames

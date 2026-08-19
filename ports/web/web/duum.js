@@ -254,26 +254,275 @@ function releaseAll() {
 }
 
 // ---- sound ------------------------------------------------------------------
-// The engine asks for single square-wave notes. One oscillator, retuned per
-// note, is the whole synthesiser.
+// Three things arrive from the engine: a beep, a sample, and a whole Standard
+// MIDI File. The first two WebAudio plays directly. The third it cannot: a
+// MIDI file contains no audio, only instructions, so the notes are synthesised
+// here from oscillators.
+//
+// Nothing is preloaded and nothing is fetched. Every byte of this came out of
+// the WAD the player chose.
 
+function ensureAudio() {
+    if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === "suspended") audio.resume();
+    return audio;
+}
+
+// The engine asks for single square-wave notes when a host cannot do better.
+// This one can, so beep() is now only reached if something upstream went
+// wrong, but it stays: the contract has it, and silence would be worse.
 function beep(midi, ticks) {
     if (midi <= 0) { if (osc) { try { osc.stop(); } catch (_) {} osc = null; } return; }
     try {
-        if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
-        if (audio.state === "suspended") audio.resume();
+        const ac = ensureAudio();
         const hz = 440 * Math.pow(2, (midi - 69) / 12);
-        const o = audio.createOscillator();
-        const g = audio.createGain();
+        const o = ac.createOscillator();
+        const g = ac.createGain();
         o.type = "square";
         o.frequency.value = hz;
         g.gain.value = 0.04;                 // a PC speaker, not a siren
-        o.connect(g).connect(audio.destination);
+        o.connect(g).connect(ac.destination);
         const dur = Math.max(0.02, ticks / 60);
         o.start();
-        o.stop(audio.currentTime + dur);
+        o.stop(ac.currentTime + dur);
         osc = o;
     } catch (_) { /* no audio is not an error */ }
+}
+
+// ---- samples ----------------------------------------------------------------
+
+const sfxBuf = new Map();                    // slot -> AudioBuffer
+
+function sfxLoad(slot, pcm, rate) {
+    try {
+        const ac = ensureAudio();
+        // A DS lump is unsigned 8-bit mono. The buffer keeps the WAD's own
+        // rate and the browser resamples it on playback, which it does better
+        // than a loop here would.
+        const buf = ac.createBuffer(1, pcm.length, rate);
+        const ch = buf.getChannelData(0);
+        for (let i = 0; i < pcm.length; i++) ch[i] = (pcm[i] - 128) / 128;
+        sfxBuf.set(slot, buf);
+    } catch (_) { /* a rate the browser will not take: that sound stays quiet */ }
+}
+
+function sfxPlay(slot, vol, sep) {
+    const buf = sfxBuf.get(slot);
+    if (!buf || !audio) return;
+    try {
+        const src = audio.createBufferSource();
+        src.buffer = buf;
+        const g = audio.createGain();
+        g.gain.value = (vol / 255) * 0.55;
+        // sep is 0 hard left, 128 centre, 255 hard right.
+        if (audio.createStereoPanner) {
+            const p = audio.createStereoPanner();
+            p.pan.value = Math.max(-1, Math.min(1, (sep - 128) / 127));
+            src.connect(p).connect(g);
+        } else {
+            src.connect(g);
+        }
+        g.connect(audio.destination);
+        src.start();
+    } catch (_) { }
+}
+
+// ---- music ------------------------------------------------------------------
+// One patch per General MIDI family (program >> 3), because sixteen plausible
+// voices is the whole difference between a score and a test tone, and a real
+// GM sample set is tens of megabytes this page is not going to download.
+// w waveform, g relative level, a attack, d decay, s sustain level, r release.
+const MUS_PATCH = [
+    { w: "triangle", g: 1.00, a: 0.005, d: 0.35, s: 0.25, r: 0.20 }, // piano
+    { w: "triangle", g: 0.90, a: 0.003, d: 0.20, s: 0.10, r: 0.15 }, // chrom perc
+    { w: "square",   g: 0.70, a: 0.020, d: 0.05, s: 0.90, r: 0.08 }, // organ
+    { w: "sawtooth", g: 0.80, a: 0.005, d: 0.30, s: 0.35, r: 0.15 }, // guitar
+    { w: "sawtooth", g: 1.00, a: 0.005, d: 0.25, s: 0.55, r: 0.10 }, // bass
+    { w: "sawtooth", g: 0.70, a: 0.060, d: 0.20, s: 0.80, r: 0.25 }, // strings
+    { w: "sawtooth", g: 0.60, a: 0.050, d: 0.20, s: 0.80, r: 0.25 }, // ensemble
+    { w: "sawtooth", g: 0.80, a: 0.020, d: 0.15, s: 0.75, r: 0.12 }, // brass
+    { w: "square",   g: 0.70, a: 0.020, d: 0.15, s: 0.75, r: 0.12 }, // reed
+    { w: "triangle", g: 0.70, a: 0.030, d: 0.15, s: 0.80, r: 0.15 }, // pipe
+    { w: "sawtooth", g: 0.60, a: 0.040, d: 0.25, s: 0.60, r: 0.20 }, // synth lead
+    { w: "sawtooth", g: 0.50, a: 0.100, d: 0.30, s: 0.70, r: 0.35 }, // synth pad
+    { w: "square",   g: 0.60, a: 0.010, d: 0.25, s: 0.30, r: 0.15 }, // synth fx
+    { w: "triangle", g: 0.70, a: 0.005, d: 0.30, s: 0.20, r: 0.15 }, // ethnic
+    { w: "triangle", g: 0.80, a: 0.002, d: 0.15, s: 0.05, r: 0.10 }, // percussive
+    { w: "sawtooth", g: 0.50, a: 0.020, d: 0.20, s: 0.40, r: 0.20 }, // sound fx
+];
+
+let music = null;                            // the score currently playing
+
+// Parse a Standard MIDI File into notes that already know how long they last.
+// Pairing note-on with note-off HERE rather than at playback time is what lets
+// each note be one oscillator with a start and a stop scheduled together,
+// instead of a voice registry that has to be searched on every release.
+function parseSmf(b) {
+    if (b.length < 22) return null;
+    if (b[0] !== 0x4d || b[1] !== 0x54 || b[2] !== 0x68 || b[3] !== 0x64) return null;
+    const div = (b[12] << 8) | b[13];
+    if (!div || (div & 0x8000)) return null;   // SMPTE: Duum never writes it
+    let end = 22 + (((b[18] << 24) | (b[19] << 16) | (b[20] << 8) | b[21]) >>> 0);
+    if (end > b.length) end = b.length;
+    let p = 22, secs = 0, per = 0.5 / div, status = 0;
+    const prog = new Array(16).fill(0);
+    const open = new Map();
+    const notes = [];
+    const close = (o, at) => { o.dur = at - o.t; notes.push(o); };
+    while (p < end) {
+        let d = 0, c;
+        do { c = b[p++]; d = (d << 7) | (c & 0x7f); } while ((c & 0x80) && p < end);
+        secs += d * per;
+        if (p >= end) break;
+        c = b[p];
+        if (c & 0x80) { status = c; p++; }
+        if (status === 0xff) {
+            const m = b[p++];
+            let L = 0;
+            do { c = b[p++]; L = (L << 7) | (c & 0x7f); } while ((c & 0x80) && p < end);
+            if (m === 0x51 && L === 3)
+                per = (((b[p] << 16) | (b[p + 1] << 8) | b[p + 2]) / 1e6) / div;
+            p += L;
+            if (m === 0x2f) break;
+            continue;
+        }
+        if (status === 0xf0 || status === 0xf7) {
+            let L = 0;
+            do { c = b[p++]; L = (L << 7) | (c & 0x7f); } while ((c & 0x80) && p < end);
+            p += L;
+            continue;
+        }
+        const hi = status & 0xf0, ch = status & 0x0f;
+        if (hi === 0xc0) { prog[ch] = b[p]; p += 1; continue; }
+        if (hi === 0xd0) { p += 1; continue; }
+        const d1 = b[p], d2 = b[p + 1];
+        p += 2;
+        const key = ch * 128 + d1;
+        if (hi === 0x90 && d2 > 0) {
+            open.set(key, { t: secs, ch: ch, note: d1, vel: d2, prog: prog[ch] });
+        } else if (hi === 0x80 || (hi === 0x90 && d2 === 0)) {
+            const o = open.get(key);
+            if (o) { close(o, secs); open.delete(key); }
+        } else if (hi === 0xb0 && (d1 === 123 || d1 === 120)) {
+            open.forEach((o) => close(o, secs));
+            open.clear();
+        }
+    }
+    open.forEach((o) => close(o, secs));
+    notes.sort((x, y) => x.t - y.t);
+    return { notes: notes, total: secs };
+}
+
+function drumVoice(n, at, out) {
+    const ac = audio;
+    // Percussion is noise with a body, not a pitch: a low note gets a
+    // lowpassed thump and a high one a short bright tick.
+    const len = Math.max(1, Math.floor(ac.sampleRate * 0.16));
+    const buf = ac.createBuffer(1, len, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++)
+        d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const f = ac.createBiquadFilter();
+    const low = n.note < 45;
+    f.type = low ? "lowpass" : "highpass";
+    f.frequency.value = low ? 200 : 2500;
+    const g = ac.createGain();
+    const peak = (n.vel / 127) * (low ? 0.5 : 0.22);
+    g.gain.setValueAtTime(peak, at);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + (low ? 0.16 : 0.07));
+    src.connect(f).connect(g).connect(out);
+    src.start(at);
+    src.stop(at + 0.18);
+}
+
+function noteVoice(n, at, out) {
+    const ac = audio;
+    const pat = MUS_PATCH[(n.prog >> 3) & 15];
+    const dur = Math.min(Math.max(n.dur, 0.06), 8);
+    const o = ac.createOscillator();
+    o.type = pat.w;
+    o.frequency.value = 440 * Math.pow(2, (n.note - 69) / 12);
+    const g = ac.createGain();
+    const peak = (n.vel / 127) * pat.g * 0.14;
+    const sus = Math.max(peak * pat.s, 0.00012);
+    // The hold point cannot land before the envelope has finished opening, or
+    // the automation runs backwards and the note clicks.
+    const hold = Math.max(at + dur, at + pat.a + pat.d + 0.01);
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(Math.max(peak, 0.00012), at + pat.a);
+    g.gain.exponentialRampToValueAtTime(sus, at + pat.a + pat.d);
+    g.gain.setValueAtTime(sus, hold);
+    g.gain.exponentialRampToValueAtTime(0.0001, hold + pat.r);
+    o.connect(g).connect(out);
+    o.start(at);
+    o.stop(hold + pat.r + 0.02);
+}
+
+// Schedule the next second of the score. Everything WebAudio plays is timed by
+// the audio clock rather than by when this happens to run, so a late tick
+// costs nothing: the notes still land where the score put them.
+const MUS_AHEAD = 1.0;
+const MUS_MAX_PER_TICK = 400;                // a stop against a very short loop
+
+function musTick() {
+    if (!music || !audio) return;
+    const now = audio.currentTime;
+    let placed = 0;
+    while (placed < MUS_MAX_PER_TICK) {
+        if (music.idx >= music.notes.length) {
+            if (!music.loop) break;
+            music.t0 += music.total;          // seamless: the next lap is ahead
+            music.idx = 0;
+            continue;
+        }
+        const n = music.notes[music.idx];
+        const at = music.t0 + n.t;
+        if (at > now + MUS_AHEAD) break;
+        try {
+            if (n.ch === 9) drumVoice(n, Math.max(at, now), music.gain);
+            else noteVoice(n, Math.max(at, now), music.gain);
+        } catch (_) { }
+        music.idx++;
+        placed++;
+    }
+    if (!music.loop && music.idx >= music.notes.length &&
+        now > music.t0 + music.total + 1.0) musStop();
+}
+
+function musPlay(smf, loop) {
+    try {
+        const ac = ensureAudio();
+        const score = parseSmf(smf);
+        if (!score || !score.notes.length) return;
+        musStop();
+        const g = ac.createGain();
+        g.gain.value = 0.5;                   // under the sound effects
+        g.connect(ac.destination);
+        music = {
+            notes: score.notes, total: score.total, idx: 0,
+            t0: ac.currentTime + 0.15, loop: !!loop, gain: g,
+            timer: setInterval(musTick, 200),
+        };
+        musTick();
+    } catch (_) { }
+}
+
+function musStop() {
+    if (!music) return;
+    clearInterval(music.timer);
+    try {
+        // Voices are already scheduled up to a second ahead and cannot be
+        // recalled, so the gate they share is closed instead. They stop
+        // themselves shortly after, into a node nothing is listening to.
+        const g = music.gain.gain;
+        g.cancelScheduledValues(audio.currentTime);
+        g.setValueAtTime(0, audio.currentTime);
+        const dead = music.gain;
+        setTimeout(() => { try { dead.disconnect(); } catch (_) { } }, 2000);
+    } catch (_) { }
+    music = null;
 }
 
 // ---- counting a boot --------------------------------------------------------
@@ -417,6 +666,14 @@ async function boot(getWad, shipped) {
             els.stats.textContent = `${m.fps.toFixed(0)} fps  ${m.ms.toFixed(1)} ms/frame`;
         } else if (m.t === "beep") {
             beep(m.midi, m.ticks);
+        } else if (m.t === "sfxload") {
+            sfxLoad(m.slot, m.pcm, m.rate);
+        } else if (m.t === "sfxplay") {
+            sfxPlay(m.slot, m.vol, m.sep);
+        } else if (m.t === "musplay") {
+            musPlay(m.smf, m.loop);
+        } else if (m.t === "musstop") {
+            musStop();
         } else if (m.t === "snap") {
             const w = snapWaiters.shift();
             if (w) {
@@ -469,6 +726,7 @@ els.scale.addEventListener("change", () => {
 });
 
 els.stop.addEventListener("click", () => {
+    musStop();
     // resetStage() terminates rather than politely asking the worker to stop,
     // because the case this button exists for is the one where the worker is
     // not reading its messages any more.

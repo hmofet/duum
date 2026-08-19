@@ -71,6 +71,22 @@ bind_name(action)                           what key is on this action
 bind_set(action, ...) / bind_reset()        change it
 ```
 
+Sound added four more, on the same terms:
+
+```
+sfx_load(slot, pcm, rate)                   keep a sample under `slot`
+sfx_play(slot, vol, sep)                    play it, mixed with the rest
+mus_play(smf, loop) / mus_stop()            a whole Standard MIDI File
+```
+
+The division of labour is the thing to preserve. The engine names the sound,
+reads it out of the WAD once, and works out how loud it is and how far to which
+side; the host mixes, synthesises and owns the clock, because the host is the
+only thing that knows what audio hardware is underneath it and a frame loop is
+not a good enough clock for music. A host that implements none of this still
+gets every sound as a `beep()`, which is what Duum did for its whole life until
+2026-08-19.
+
 A host with none of them still plays the entire game; the Controls screen just
 says the platform cannot remap keys, which is true and is better than offering
 a control that would silently do nothing. Note what is NOT in that list: the
@@ -151,6 +167,7 @@ python tools/duum_verify.py --wad DOOM1.WAD           # must be 0 failing views
 python tools/duum_golden.py check --wad DOOM1.WAD     # must be N/N identical
 python tools/duum_collide.py --wad DOOM1.WAD          # must be 4/4 checks
 python tests/input_menu.py DOOM1.WAD                 # must be 0 failed
+python tests/audio_gate.py DOOM1.WAD                  # must be 0 failed
 python tools/build.py --check DOOM1.WAD               # distributions rebuild + render
 python tests/smoke_window.py DOOM1.WAD                # the frontend actually runs
 ```
@@ -176,6 +193,14 @@ What each one is for, because they are not interchangeable:
   asserts about movement instead: a scripted walk into a known wall, 36,000
   randomised moves that may not cross a one-sided linedef, every use-door in the
   episode, and a rocket fired at a wall.
+- **`audio_gate` is the sound gate**, and it needs no audio device, which is
+  the point: it asserts about the calls the engine makes, the samples it hands
+  over and the score it converts, not about anything you can hear. So it runs
+  the same on a build box, in CI, and on a VM with no DAC (which is the common
+  case: `waveOutGetNumDevs` is 0 on a machine with no render endpoint, and that
+  is where this was written). It also carries a reader for Standard MIDI Files
+  that shares no code with the converter that writes them, for the reason
+  `duum_verify` shares none with the renderer.
 - **`input_menu` is the input gate.** It needs no display, and it asks the one
   question no rendering test can: what does this key actually DO? Left and
   right were swapped in every shipped build until it existed. It asserts

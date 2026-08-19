@@ -137,3 +137,64 @@ Two further bugs found while confirming that, both in the desktop host:
   `except` in `snd()`. The rocket launch is one of the casualties.
 
 Released on landing.
+
+## 2026-08-19, REQUEST to UnoDOS: four optional calls, for real audio on pc64
+
+Duum now plays the WAD's own sound effects and its music. Both arrive through
+optional platform calls, `hasattr`-probed as always, so **pc64 needs no change
+to keep working**: without them the engine falls back to `beep()` and the
+device sounds exactly as it does today. This is an offer, not a break.
+
+The four calls, in full (`duum/hostapi.py` is the authority):
+
+```
+sfx_load(slot, pcm, rate)     keep a sample under `slot`; sent once per sound
+sfx_play(slot, vol, sep)      play it, mixed with whatever else is running
+mus_play(smf, loop)           a whole Standard MIDI File
+mus_stop()
+```
+
+`pcm` is unsigned 8-bit mono at `rate` Hz, straight out of the WAD's DS lump
+(122 of them in the shareware IWAD, all 11025 Hz). `vol` is 0..255, `sep` is 0
+hard left, 128 centre, 255 hard right. `slot` is a small dense integer, stable
+for the life of the program, so an array index is the intended implementation.
+
+**Why this should be cheap on pc64, and cheaper than it looks.** Both halves
+already exist there and neither is exposed to MicroPython:
+
+- `snd_pcm.h` has the sample stream: `uno_snd_stream_begin(rate, channels)`,
+  `uno_snd_stream_space()`, `uno_snd_stream_write()`, over HDA and AC'97.
+- `unomedia/um_midi.c` is a complete Standard MIDI File player: type 0/1/2
+  parser, tick-accurate scheduler, polyphonic synthesiser, renders to PCM.
+  `mus_play` is that decoder pointed at the bytes Duum hands over.
+
+So the work is `mod_uno.c` bindings plus glue, not an implementation.
+
+**The one thing that genuinely is missing there: a mixer.** `snd_pcm` takes
+ONE stream at a time and the square voice is muted while it holds the ring, so
+a naive `sfx_play` would cut the music off on every gunshot. Duum's desktop
+host mixes sixteen voices in Python at 11025 Hz stereo and it costs a few per
+cent of one core, so the C version is not the hard part; it just has to exist,
+and it has to sum the music stream and the effects rather than choose between
+them. If that is more than pc64 wants right now, **implementing only
+`mus_play`/`mus_stop` is a perfectly good half step**: music through
+`um_midi`, effects staying as beeps, and the engine will not notice.
+
+**Two things to know before wiring it up:**
+
+- **Memory.** The engine converts MUS to SMF in Python and hands over the
+  whole file. The largest in the shareware WAD is `D_E1M8` at 59 KB in and
+  about 66 KB out, both transient, on top of the MUS lump itself. That is a
+  real spike on a device, and it happens on every level load. If it is too
+  much, say so here and the engine can stream the conversion instead: the
+  format allows it, it was written as one pass because a desktop had no
+  reason to care.
+- **Sample memory grows with play.** `sfx_load` arrives lazily, the first time
+  a sound is actually heard, so the host's sample store fills up over a
+  session rather than at startup. All 67 distinct DS lumps together are about
+  500 KB at 8-bit. A host that cannot hold them all may drop any slot it
+  likes: the engine reloads a slot only if it is asked to, so an evicted slot
+  is silent once and then works again. It never queries the host about them.
+
+Nothing here is claimed downstream and nothing is urgent. Filed so the device
+side can plan it rather than discover it.

@@ -30,7 +30,9 @@ let scale = 2;
 let fbW = 0, fbH = 0;
 let frames = 0, msTotal = 0, lastReport = 0;
 
-const post = (m) => self.postMessage(m);
+// tx transfers buffers rather than copying them, which is what the sample
+// and score handoffs want: the wasm side already made its own copy.
+const post = (m, tx) => self.postMessage(m, tx || []);
 
 function wrap() {
     const c = (n, ret, args) => Module.cwrap(n, ret, args);
@@ -67,6 +69,14 @@ async function start(msg) {
         // The beep is a note, and AudioContext does not exist in a worker, so
         // it goes to the page to be played there.
         duumBeep: (midi, ticks) => post({ t: "beep", midi, ticks }),
+        // Samples and music go to the page for the same reason the beep does:
+        // AudioContext does not exist in a worker.
+        duumSfxLoad: (slot, pcm, rate) =>
+            post({ t: "sfxload", slot, pcm, rate }, [pcm.buffer]),
+        duumSfxPlay: (slot, vol, sep) => post({ t: "sfxplay", slot, vol, sep }),
+        duumMusPlay: (smf, loop) =>
+            post({ t: "musplay", smf, loop }, [smf.buffer]),
+        duumMusStop: () => post({ t: "musstop" }),
     });
     wrap();
 
