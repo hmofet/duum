@@ -350,10 +350,33 @@ except ImportError:
 
 try:
     import ctypes as _ct
-    _mm = _ct.WinDLL("winmm")
 except Exception:
     _ct = None
-    _mm = None
+
+# The two system audio libraries this can drive.  Both are part of the
+# operating system the way winmm is part of Windows, so nothing third-party is
+# involved either way and rule 1 holds.
+#
+# Only the SINK differs between them.  The mixer below is the same code on
+# both: it turns the engine's samples into 11025 Hz stereo blocks, and then
+# either waveOut or ALSA carries those blocks to the hardware.  Writing that
+# twice would be two things to keep in step for no reason.
+_mm = None                           # winmm, on Windows
+_alsa = None                         # libasound, on Linux
+
+if _ct is not None and hasattr(_ct, "WinDLL"):
+    try:
+        _mm = _ct.WinDLL("winmm")
+    except Exception:
+        _mm = None
+
+if _ct is not None and _mm is None:
+    for _soname in ("libasound.so.2", "libasound.so"):
+        try:
+            _alsa = _ct.CDLL(_soname)
+            break
+        except Exception:
+            _alsa = None
 
 
 # ---- beep, off the game loop -----------------------------------------------
@@ -451,7 +474,103 @@ _snd_state = [0]                     # 0 untried, 1 running, 2 unavailable
 _snd_silence = b"\0" * (_SND_FRAMES * 4)
 
 
+# ---- the ALSA sink ---------------------------------------------------------
+# snd_pcm_set_params is libasound's own "just set it up" helper, which is
+# exactly the level this needs: one call rather than a hw_params dance.
+#
+# soft_resample is 1 on purpose.  Doom's samples are 11025 Hz and most cards
+# only do 44100 or 48000, so without it the open fails on the machines this is
+# most likely to run on.  With it ALSA resamples, and the mixer stays at the
+# WAD's own rate on every platform.
+_SND_PCM_STREAM_PLAYBACK = 0
+_SND_PCM_FORMAT_S16_LE = 2
+_SND_PCM_ACCESS_RW_INTERLEAVED = 3
+
+
+def _alsa_bind():
+    _alsa.snd_pcm_open.restype = _ct.c_int
+    _alsa.snd_pcm_open.argtypes = [_ct.POINTER(_ct.c_void_p), _ct.c_char_p,
+                                   _ct.c_int, _ct.c_int]
+    _alsa.snd_pcm_set_params.restype = _ct.c_int
+    _alsa.snd_pcm_set_params.argtypes = [_ct.c_void_p, _ct.c_int, _ct.c_int,
+                                         _ct.c_uint, _ct.c_uint, _ct.c_int,
+                                         _ct.c_uint]
+    # writei returns a FRAME COUNT or a negative error, and on 64-bit that is
+    # a long: leaving it at the default int truncates both.
+    _alsa.snd_pcm_writei.restype = _ct.c_long
+    _alsa.snd_pcm_writei.argtypes = [_ct.c_void_p, _ct.c_void_p, _ct.c_ulong]
+    _alsa.snd_pcm_recover.restype = _ct.c_int
+    _alsa.snd_pcm_recover.argtypes = [_ct.c_void_p, _ct.c_int, _ct.c_int]
+    _alsa.snd_strerror.restype = _ct.c_char_p
+    _alsa.snd_strerror.argtypes = [_ct.c_int]
+
+
+def _alsa_err(rc):
+    try:
+        return _alsa.snd_strerror(rc).decode("utf-8", "replace")
+    except Exception:
+        return str(rc)
+
+
+def _snd_start_alsa():
+    """Open ALSA and start the feeder.  Raises if there is no audio."""
+    _alsa_bind()
+    # DUUM_ALSA_DEVICE is for the machines where "default" is not what you
+    # want, and for the gate, which points it at ALSA's file plugin and reads
+    # back the samples the mixer actually produced.
+    dev = _os.environ.get("DUUM_ALSA_DEVICE", "default")
+    h = _ct.c_void_p()
+    rc = _alsa.snd_pcm_open(_ct.byref(h), dev.encode(),
+                            _SND_PCM_STREAM_PLAYBACK, 0)
+    if rc < 0:
+        raise OSError("snd_pcm_open(%s): %s" % (dev, _alsa_err(rc)))
+    rc = _alsa.snd_pcm_set_params(h, _SND_PCM_FORMAT_S16_LE,
+                                  _SND_PCM_ACCESS_RW_INTERLEAVED,
+                                  2, _SND_RATE, 1, 60000)
+    if rc < 0:
+        raise OSError("snd_pcm_set_params: %s" % _alsa_err(rc))
+    _snd_dev[0] = h
+    t = threading.Thread(target=_snd_feed_alsa, args=(h,), name="duum-mixer")
+    t.daemon = True
+    t.start()
+
+
+def _snd_feed_alsa(h):
+    """Blocking writes, which is the whole timing mechanism.
+
+    snd_pcm_writei does not return until the card has room, so this loop runs
+    at exactly the rate the hardware consumes and needs no clock of its own.
+    That is the one real simplification ALSA has over waveOut here, where the
+    same job needs a poll loop over buffer flags.
+    """
+    frame = 4                                  # stereo, 16-bit
+    while True:
+        block = _snd_mix()
+        buf = _ct.create_string_buffer(block, len(block))
+        off = 0
+        while off < _SND_FRAMES:
+            n = _alsa.snd_pcm_writei(h, _ct.byref(buf, off * frame),
+                                     _SND_FRAMES - off)
+            if n < 0:
+                # An underrun is normal when a frame took too long: recover
+                # and carry on rather than tearing the sound down over it.
+                if _alsa.snd_pcm_recover(h, int(n), 1) < 0:
+                    time.sleep(0.05)
+                    break
+                continue
+            off += int(n)
+
+
 def _snd_start():
+    """Open whatever this machine has, and start the feeder."""
+    if _mm is None:
+        if _alsa is None:
+            raise OSError("no audio library on this platform")
+        return _snd_start_alsa()
+    return _snd_start_winmm()
+
+
+def _snd_start_winmm():
     """Open the device and start the feeder.  Raises if there is no audio."""
     fmt = _WaveFmt(1, 2, _SND_RATE, _SND_RATE * 4, 4, 16, 0)
     h = _ct.c_void_p()
@@ -766,9 +885,26 @@ def mus_stop():
 # probes every optional call with hasattr, so a name left defined here is a
 # promise: leaving sfx_play in place on a box with no DAC would make the
 # engine stop falling back to beep() and simply go quiet.
-if _mm is None or _mm.waveOutGetNumDevs() < 1:
+# Windows can be asked how many devices there are before committing to
+# anything.  ALSA cannot: whether "default" opens is only knowable by opening
+# it, and doing that at import time would take the audio device away from
+# whatever else is using it just to find out.  So on Linux the calls are
+# offered whenever libasound loaded, and _snd_start_alsa RAISES if the open
+# fails, which is exactly the answer hostapi.py documents for "this host
+# cannot play samples at all" and puts the engine back on beep().
+_have_sfx_sink = False
+if _mm is not None and _mm.waveOutGetNumDevs() >= 1:
+    _have_sfx_sink = True
+elif _alsa is not None:
+    _have_sfx_sink = True
+if not _have_sfx_sink:
     del sfx_load
     del sfx_play
+
+# Music still needs a synthesiser, and ALSA is not one: it carries PCM, while
+# mus_play is handed a Standard MIDI File and nothing on a stock Linux box is
+# obliged to be able to render it.  Windows has a General MIDI synth built in,
+# so this stays a Windows-only call until a Linux path is written for it.
 if _mm is None or _mm.midiOutGetNumDevs() < 1:
     del mus_play
     del mus_stop

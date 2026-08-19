@@ -500,6 +500,36 @@ def main():
         check("and finds every note in it", len(evs) >= r["notes"],
               "%d events for %d notes" % (len(evs), r["notes"]))
 
+    # ---- 9. the sink this platform actually has ----------------------------
+    # The mixer above is platform-neutral and is checked as such.  What differs
+    # is the sink, and the thing worth asserting about it is that the host
+    # admits to exactly what it can do: a name left defined here is a promise
+    # the engine believes, and believing it wrongly is silence.
+    if desktop._mm is not None:
+        devs = desktop._mm.waveOutGetNumDevs()
+        check("Windows: sfx offered only when waveOut has a device",
+              hasattr(desktop, "sfx_play") == (devs >= 1),
+              "%d devices, offered=%s" % (devs, hasattr(desktop, "sfx_play")))
+    elif desktop._alsa is not None:
+        check("Linux: libasound bound, so sfx is offered",
+              hasattr(desktop, "sfx_load") and hasattr(desktop, "sfx_play"))
+        # The binding is the part a refactor breaks silently: a wrong restype
+        # on writei truncates a frame count or an error code on 64-bit, and
+        # the symptom is stuttering rather than an exception.
+        try:
+            desktop._alsa_bind()
+            ok = (desktop._alsa.snd_pcm_writei.restype is not None and
+                  desktop._alsa.snd_pcm_open.argtypes is not None)
+        except Exception as e:
+            ok = False
+            print("    binding raised " + repr(e))
+        check("Linux: the ALSA entry points bind", ok)
+        check("Linux: music is not claimed without a synthesiser",
+              not hasattr(desktop, "mus_play"),
+              "ALSA carries PCM; it does not render a MIDI file")
+    else:
+        print("  (no audio library on this platform: sink checks skipped)")
+
     print("%d check(s) failed" % len(FAILED))
     return 1 if FAILED else 0
 
