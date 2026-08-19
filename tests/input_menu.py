@@ -163,6 +163,37 @@ def main():
     check("the rebound key walks",
           (app.px - ox) * fx + (app.py - oy) * fy > 0)
 
+    # ---- 3b. capture where there is no frontend to do it -------------------
+    # UnoDOS has no frontend: the engine hands the raw key event to the host.
+    # The host's answer is all it learns, so it still never has to know what
+    # this platform calls a key.
+    seen = []
+    real = desktop.bind_set
+    desktop.bind_set = lambda a, u, sc: (seen.append((a, u, sc)), True)[1]
+    app.menu = [engine.Duum.M_KEYS, 1]
+    app.captures_keys = False
+    app.key(13, 0, 0)
+    check("row selected for capture", app.capture == engine.A_BACK)
+    app.key(ord("m"), 0, 0)
+    check("the engine forwards the raw event",
+          seen == [(engine.A_BACK, ord("m"), 0)])
+    check("capture ends", app.capture is None)
+
+    desktop.bind_set = lambda a, u, sc: False
+    app.key(13, 0, 0)
+    app.msg = ""
+    app.key(ord("m"), 0, 0)
+    check("a refused key says so", app.msg != "")
+    check("refusal ends the capture", app.capture is None)
+
+    app.key(13, 0, 0)
+    was = app.capture
+    app.key(0, 0x17, 0)
+    check("Esc cancels a capture", was is not None and app.capture is None)
+    desktop.bind_set = real
+    app.captures_keys = True
+    app.menu = None
+
     desktop.bind_reset()
     check("reset restores the defaults",
           desktop.bind_mask("Up") == engine.A_FWD and

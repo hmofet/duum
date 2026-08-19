@@ -68,6 +68,9 @@ class Window:
         # This frontend owns the window, so it can honour Menu -> Quit; the
         # engine only offers the row when someone says they will act on it.
         app.allow_quit = True
+        # ...and it can name keys, so it takes rebinds itself rather than
+        # letting the engine hand the raw event to the host.
+        app.captures_keys = True
 
     # ---- input -------------------------------------------------------------
     def _mask(self):
