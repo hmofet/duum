@@ -4591,6 +4591,36 @@ import argparse
 import os
 import sys
 
+# ---- build provenance ------------------------------------------------------
+# Empty in the source tree and empty in the committed distribution, both on
+# purpose: a commit hash written into a file that is itself part of that commit
+# can never be right.  tools/build.py fills in the version when it generates
+# the distribution, and packaging/ fills in the rest when it freezes a binary.
+#
+# This exists because a duum.exe sat on a NAS for a day with no sound in it and
+# there was no way to tell, by looking at the file, that it had been built
+# forty minutes before sound was written.  `duum --version` answers that now.
+BUILD_VERSION = "0.1.0"
+BUILD_COMMIT = ""
+BUILD_DATE = ""
+BUILD_TARGET = ""
+
+
+def version_text():
+    v = BUILD_VERSION
+    if not v:
+        try:
+            from duum import __version__ as pkg_version
+            v = pkg_version
+        except Exception:
+            v = "unknown"
+    out = ["Duum " + v]
+    out.append("  commit   " + (BUILD_COMMIT or "(running from source)"))
+    out.append("  built    " + (BUILD_DATE or "(not a packaged build)"))
+    out.append("  target   " + (BUILD_TARGET or "(not a packaged build)"))
+    return "\n".join(out)
+
+
 WAD_NAMES = ("doom1.wad", "freedoom1.wad", "doom.wad", "doom2.wad",
              "freedoom2.wad", "tnt.wad", "plutonia.wad")
 
@@ -4679,7 +4709,14 @@ def main(argv=None):
     ap.add_argument("--level", default=None, help="start level, e.g. E1M3")
     ap.add_argument("--shot", default=None, metavar="PNG",
                     help="render one frame to a PNG and exit")
+    ap.add_argument("--version", action="store_true",
+                    help="print the version, and which commit this was built "
+                         "from, and exit")
     args = ap.parse_args(argv)
+
+    if args.version:
+        print(version_text())
+        return 0
 
     wad = args.wad or find_wad()
     if (not wad or not os.path.isfile(wad)) and not args.shot:

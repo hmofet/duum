@@ -16,9 +16,13 @@ Output: exe/duum.exe
 
 import argparse
 import os
+import platform
 import shutil
 import subprocess
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from stamp import stamped_entry                              # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -59,6 +63,10 @@ def main():
         subprocess.check_call([sys.executable,
                                os.path.join(HERE, "icon.py")])
 
+    # Every packaged build says which commit it came from; see stamp.py.
+    target = "windows-" + platform.machine().lower()
+    entry = stamped_entry(ROOT, WORK, target, ENTRY)
+
     cmd = [sys.executable, "-m", "PyInstaller",
            "--onefile",
            "--name", "duum",
@@ -82,7 +90,7 @@ def main():
            ]
     if not args.console:
         cmd.append("--windowed")
-    cmd.append(ENTRY)
+    cmd.append(entry)
 
     print("  " + " ".join(cmd[2:]))
     subprocess.check_call(cmd, cwd=ROOT)

@@ -89,6 +89,10 @@ def build_desktop(version):
     engine = strip_relative_imports(read("duum", "engine.py"), "engine")
     front = strip_relative_imports(read("duum", "frontends", "tkwin.py"), "tk")
     cli = strip_relative_imports(read("duum", "__main__.py"), "cli")
+    # The version is known here; the commit is not, and must not be, because
+    # this file is committed and a hash cannot name the commit containing it.
+    # packaging/ stamps the rest into the frozen binary, which is not committed.
+    cli = cli.replace('BUILD_VERSION = ""', 'BUILD_VERSION = "%s"' % version, 1)
 
     alias = (
         "class _Self(object):\n"
