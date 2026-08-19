@@ -110,6 +110,22 @@ def main():
     app.key(27, 0, 0)
     check("Esc opens the menu", app.menu_open())
     check("menu asks for raw keys", app.wants_raw())
+    app.key(27, 0, 0)
+    check("Esc closes it again", not app.menu_open())
+
+    # UnoDOS reports non-character keys as a SCANCODE with uni 0, and its
+    # Escape is 0x17 (hid_kbd.h).  Get this wrong and the menu simply never
+    # opens on the device, while every desktop test still passes.
+    app.key(0, 0x17, 0)
+    check("the device's Esc scancode opens it", app.menu_open())
+
+    # Quit is only offered where something will act on it.  The shell owns the
+    # windows on UnoDOS, so the row would do nothing there.
+    app.allow_quit = False
+    check("no Quit row without a frontend that can",
+          "Quit" not in [r[0] for r in app.menu_rows()])
+    app.allow_quit = True
+    check("Quit row when there is", "Quit" in [r[0] for r in app.menu_rows()])
 
     was = app.show_fps
     app.key(0, 2, 0)                            # down: Options

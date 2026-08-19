@@ -65,6 +65,9 @@ class Window:
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.running = True
         self.frames = 0
+        # This frontend owns the window, so it can honour Menu -> Quit; the
+        # engine only offers the row when someone says they will act on it.
+        app.allow_quit = True
 
     # ---- input -------------------------------------------------------------
     def _mask(self):

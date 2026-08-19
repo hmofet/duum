@@ -1,6 +1,6 @@
 # Duum 0.1.0 - GENERATED FILE, DO NOT EDIT.
 #
-# Built from the duum package by tools/build.py on 2026-08-18.
+# Built from the duum package by tools/build.py on 2026-08-19.
 # Edit the package and rebuild; edits here are lost.
 # Source and licence (MPL-2.0): https://github.com/hmofet/duum
 #
@@ -2337,11 +2337,27 @@ class Duum(uno.App):
 
     M_MAIN, M_OPTS, M_KEYS = 0, 1, 2
 
+    # Escape is not one code across platforms and cannot be made into one.
+    # A desktop event carries the ASCII 27; UnoDOS reports non-character keys
+    # as a SCANCODE with uni 0, and its Escape is 0x17 (hid_kbd.h).  Accepting
+    # both is the whole of the platform difference, and getting it wrong is
+    # invisible on a desktop: the menu simply never opens on the device.
+    ESC_UNI = 27
+    ESC_SCAN = 0x17
+
+    def is_esc(self, uni, scan):
+        return uni == Duum.ESC_UNI or scan == Duum.ESC_SCAN
+
     def menu_init(self):
         self.menu = None            # None, or [screen, cursor]
         self.menu_dirty = False
         self.capture = None         # action id the host is capturing a key for
-        self.quit = False           # the frontend closes the window on this
+        # A frontend that can actually close the program sets allow_quit, and
+        # then acts on self.quit.  UnoDOS's shell owns its own windows and has
+        # no such call, so the row is not offered there rather than being
+        # offered and doing nothing.
+        self.quit = False
+        self.allow_quit = getattr(self, "allow_quit", False)
         self.fps = 0.0
         self.fps_n = 0
         self.fps_t = uno.ticks() if self.have_ticks else 0
@@ -2394,7 +2410,10 @@ class Duum(uno.App):
             return []
         sc = self.menu[0]
         if sc == Duum.M_MAIN:
-            return [("Resume", ""), ("Options", ""), ("Quit", "")]
+            rows = [("Resume", ""), ("Options", "")]
+            if self.allow_quit:
+                rows.append(("Quit", ""))
+            return rows
         if sc == Duum.M_OPTS:
             return [("FPS counter", "on" if self.show_fps else "off"),
                     ("Controls", ""), ("Back", "")]
@@ -2419,7 +2438,7 @@ class Duum(uno.App):
         rows = self.menu_rows()
         n = len(rows)
         self.menu_dirty = True
-        if uni == 27:                          # Esc: back one screen, or out
+        if self.is_esc(uni, scan):             # Esc: back one screen, or out
             if self.menu[0] == Duum.M_MAIN:
                 self.menu = None
             else:
@@ -2450,11 +2469,11 @@ class Duum(uno.App):
         rows = self.menu_rows()
         label = rows[i][0] if i < len(rows) else ""
         if sc == Duum.M_MAIN:
-            if i == 0:
+            if label == "Resume":
                 self.menu = None
-            elif i == 1:
+            elif label == "Options":
                 self.menu = [Duum.M_OPTS, 0]
-            else:
+            elif label == "Quit":
                 self.quit = True
         elif sc == Duum.M_OPTS:
             if i == 0:
@@ -2535,7 +2554,7 @@ class Duum(uno.App):
             return False
         if self.menu is not None:
             return self.menu_key(uni, scan)
-        if uni == 27:                              # Esc opens the menu
+        if self.is_esc(uni, scan):                 # Esc opens the menu
             self.menu = [Duum.M_MAIN, 0]
             self.menu_dirty = True
             return True
@@ -3607,6 +3626,9 @@ class Window:
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.running = True
         self.frames = 0
+        # This frontend owns the window, so it can honour Menu -> Quit; the
+        # engine only offers the row when someone says they will act on it.
+        app.allow_quit = True
 
     # ---- input -------------------------------------------------------------
     def _mask(self):
