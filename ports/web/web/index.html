@@ -76,6 +76,13 @@
   pre { overflow-x: auto; font-size: .8rem; color: var(--dim); margin: .6rem 0 0; }
 
   section { margin-top: 2.5rem; }
+  summary { cursor: pointer; color: var(--dim); }
+  summary:hover { color: var(--ink); }
+  /* A <summary> containing a heading lays the heading out as a block and
+     pushes it below the marker; inline puts it back on the marker's line. */
+  summary h2 { display: inline; font-size: 1.1rem; color: var(--ink); }
+  details[open] > summary { margin-bottom: .5rem; }
+  #err-details summary { font-size: .88rem; }
   h2 { font-size: 1.1rem; margin: 0 0 .5rem; }
   section p, li { color: var(--dim); font-size: .94rem; }
   kbd { background: var(--panel); border: 1px solid var(--line); border-radius: .25rem;
@@ -110,6 +117,8 @@
       <option value="3">3x</option>
       <option value="4">4x</option>
     </select>
+    <button id="swap" hidden>Change WAD</button>
+    <button id="shipped" hidden>Back to Freedoom</button>
     <button id="stop" hidden>Stop</button>
   </div>
 
@@ -123,11 +132,15 @@
   <div class="err" id="err" hidden>
     <h2>That did not work</h2>
     <div id="err-text"></div>
-    <pre id="err-log" hidden></pre>
+    <details id="err-details" hidden>
+      <summary>Show the technical details</summary>
+      <pre id="err-log"></pre>
+    </details>
   </div>
 
   <section>
-    <h2>Controls</h2>
+    <details>
+    <summary><h2>Controls</h2></summary>
     <p><kbd>&uarr;</kbd> <kbd>&darr;</kbd> or <kbd>W</kbd> <kbd>S</kbd> move,
        <kbd>&larr;</kbd> <kbd>&rarr;</kbd> or <kbd>A</kbd> <kbd>D</kbd> turn,
        <kbd>,</kbd> <kbd>.</kbd> or <kbd>Q</kbd> <kbd>X</kbd> strafe,
@@ -138,6 +151,7 @@
        the browser has no settings file to remember it in, so the Controls
        screen says the platform cannot remap rather than showing you a control
        that quietly does nothing.</p>
+    </details>
   </section>
 
   <section>

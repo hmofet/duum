@@ -11,6 +11,7 @@ const els = {
     bar: $("bar"), barFill: $("bar-fill"), status: $("status"),
     stats: $("stats"), scale: $("scale"), pick: $("pick"), file: $("file"),
     err: $("err"), errText: $("err-text"), errLog: $("err-log"), stop: $("stop"),
+    errDetails: $("err-details"), swap: $("swap"), shipped: $("shipped"),
     wadName: $("wad-name"),
 };
 
@@ -18,6 +19,10 @@ let worker = null;
 let audio = null;
 let osc = null;
 let booted = false;
+let busy = false;            // a boot is in flight; a second would race it
+let usingShipped = true;     // false once a WAD from the player's disk is in
+let shippedWad = null;       // the downloaded IWAD, kept for switching back
+let shippedName = "";
 const snapWaiters = [];
 
 // Grab a PNG of the current screen. Exposed on window rather than wired to a
@@ -37,9 +42,16 @@ function say(msg) { els.status.textContent = msg; }
 function showError(msg, log) {
     els.err.hidden = false;
     els.errText.textContent = msg;
+    // The traceback is kept, but folded away: it is the first thing wanted
+    // when reporting a bug and the last thing wanted when reading a sentence
+    // that already explains what went wrong.
     if (log && log.trim()) {
-        els.errLog.hidden = false;
+        els.errDetails.hidden = false;
+        els.errDetails.open = false;
         els.errLog.textContent = log.trim();
+    } else {
+        els.errDetails.hidden = true;
+        els.errLog.textContent = "";
     }
     els.bar.hidden = true;
 }
@@ -73,12 +85,21 @@ async function loadManifest(url) {
 }
 
 async function fetchWad(manifestUrl) {
+    // Fetched once and kept: swapping back to the shipped WAD after trying
+    // your own should not re-download 10 MB.
     // Same reasoning as the worker URL: resolve against this module, so the
     // WAD is found whether or not the page URL carries a trailing slash.
     const url = new URL(manifestUrl, import.meta.url);
+    if (shippedWad) {
+        els.wadName.textContent = shippedName;
+        // A transferred ArrayBuffer is detached at its old owner, so the cache
+        // has to hand out a COPY or the second play gets an empty buffer.
+        return shippedWad.slice(0);
+    }
     const base = url.href.replace(/[^/]*$/, "");
     const man = await loadManifest(url);
     els.wadName.textContent = man.name || "";
+    shippedName = man.name || "";
 
     const total = man.parts.reduce((n, p) => n + p.bytes, 0);
     const out = new Uint8Array(man.bytes);
@@ -109,7 +130,8 @@ async function fetchWad(manifestUrl) {
     if (at !== man.bytes)
         throw new Error(`assembled ${at} bytes, expected ${man.bytes}`);
     progress(1);
-    return out.buffer;
+    shippedWad = out.buffer;
+    return shippedWad.slice(0);
 }
 
 // ---- a WAD from the player's own disk --------------------------------------
@@ -278,6 +300,32 @@ function countBoot() {
     } catch (_) { /* a counter is never worth an error on the page */ }
 }
 
+// ---- which controls are on show ---------------------------------------------
+// One function rather than a line here and a line there, because the set is
+// small and the failure mode of scattering it is a button that survives into a
+// state it does not belong in.
+
+function idle() {
+    els.poster.hidden = false;
+    els.boot.disabled = false;
+    els.pick.disabled = false;
+    els.scale.disabled = true;
+    els.stop.hidden = true;
+    els.swap.hidden = true;
+    els.shipped.hidden = true;
+    els.stats.textContent = "";
+}
+
+function running() {
+    els.poster.hidden = true;
+    els.bar.hidden = true;
+    els.scale.disabled = false;
+    els.stop.hidden = false;
+    els.swap.hidden = false;
+    // Only worth offering when it would change anything.
+    els.shipped.hidden = usingShipped;
+}
+
 // ---- sizing -----------------------------------------------------------------
 // Whole multiples only; see the note in the worker.
 
@@ -309,8 +357,17 @@ function resetStage() {
     els.stats.textContent = "";
 }
 
-async function boot(getWad) {
-    if (booted) return;                 // already running; Stop first
+// `shipped` records which WAD this is, so the page can offer the way back.
+async function boot(getWad, shipped) {
+    // Not "return if already booted": swapping the WAD of a RUNNING game is a
+    // supported thing to do, and resetStage() below is what makes it safe -
+    // it terminates the worker, so the new one starts on a clean interpreter
+    // with no level, textures or sprites left over from the old WAD. Only a
+    // boot that is still in flight is worth refusing, because two would race
+    // over the same canvas.
+    if (busy) return;
+    busy = true;
+    usingShipped = !!shipped;
     resetStage();
     els.boot.disabled = true;
     els.pick.disabled = true;
@@ -318,10 +375,9 @@ async function boot(getWad) {
     els.errLog.hidden = true;
 
     const giveUp = (msg, log) => {
+        busy = false;
         showError(msg, log);
-        els.boot.disabled = false;
-        els.pick.disabled = false;
-        els.poster.hidden = false;
+        idle();
     };
 
     if (!("transferControlToOffscreen" in els.canvas)) {
@@ -348,11 +404,9 @@ async function boot(getWad) {
         const m = e.data;
         if (m.t === "ready") {
             booted = true;
+            busy = false;
             countBoot();
-            els.poster.hidden = true;
-            els.bar.hidden = true;
-            els.stop.hidden = false;
-            els.scale.disabled = false;
+            running();
             say(`Ready in ${m.bootMs} ms. Arrows or WASD to move, Ctrl to fire, ` +
                 "Space to open.");
             const s = els.scale.value === "auto" ? autoScale(m.w, m.h)
@@ -371,13 +425,11 @@ async function boot(getWad) {
             }
         } else if (m.t === "error") {
             booted = false;
+            busy = false;
             showError(m.msg, m.log);
-            els.stop.hidden = true;
             // Offer the poster again, so a bad pick is one click from another
             // try rather than a dead page.
-            els.poster.hidden = false;
-            els.boot.disabled = false;
-            els.pick.disabled = false;
+            idle();
         }
     };
     worker.onerror = (e) => showError("The engine thread failed: " + e.message);
@@ -389,14 +441,24 @@ async function boot(getWad) {
 
 // ---- wiring -----------------------------------------------------------------
 
-els.boot.addEventListener("click", () => boot(() => fetchWad(els.boot.dataset.manifest)));
+const playShipped = () => boot(() => fetchWad(els.boot.dataset.manifest), true);
 
-els.pick.addEventListener("click", () => els.file.click());
+els.boot.addEventListener("click", playShipped);
+els.shipped.addEventListener("click", playShipped);
+
+// One file input, two buttons: the poster's before anything is running, and
+// the row's while it is. Both land in the same change handler.
+const askForFile = () => { els.file.value = ""; els.file.click(); };
+els.pick.addEventListener("click", askForFile);
+els.swap.addEventListener("click", askForFile);
+
+// value is cleared before every open so that picking the SAME file twice still
+// fires change; otherwise a re-pick after a bad load looks like a dead button.
 els.file.addEventListener("change", () => {
     const f = els.file.files && els.file.files[0];
     if (!f) return;
     els.wadName.textContent = f.name;
-    boot(() => readLocal(f));
+    boot(() => readLocal(f), false);
 });
 
 els.scale.addEventListener("change", () => {
@@ -411,11 +473,8 @@ els.stop.addEventListener("click", () => {
     // because the case this button exists for is the one where the worker is
     // not reading its messages any more.
     resetStage();
-    els.stop.hidden = true;
-    els.poster.hidden = false;
-    els.boot.disabled = false;
-    els.pick.disabled = false;
-    els.scale.disabled = true;
+    busy = false;
+    idle();
     say("Stopped.");
 });
 
