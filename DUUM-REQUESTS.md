@@ -113,3 +113,27 @@ Landed this session, all on `master` with the gates green:
 and the Controls screen have never been exercised on the ZimaBlade. Everything
 either one depends on is asserted on the host and in QEMU, which is exactly the
 position the wall-collision bug hid in for months.
+
+## 2026-08-19, CLAIM: audio, and the two platform calls it needs
+
+Taking the sound path: `duum/engine.py`'s `snd`, `duum/hostapi.py`, the desktop
+host and `ports/web/`. This adds to the platform surface, additively and
+`hasattr`-probed, so no port has to move and a host that implements none of it
+sounds exactly as it does today.
+
+The reported symptoms are one root cause. The platform surface can express a
+single square-wave note and nothing else, so `snd()` maps every game event to a
+pitch. Nothing in this repository has ever read a `DS*` sample lump, and there
+is no music code at all: the shareware WAD carries 122 sound lumps and 45 MUS
+lumps that no build has ever opened.
+
+Two further bugs found while confirming that, both in the desktop host:
+
+- `winsound.Beep` is synchronous, so every sound stalls the game loop. Measured
+  on this machine: a door costs 112 ms, a pistol shot 59 ms, which is four
+  frames and two frames.
+- Everything below midi 27 is silent even as a beep. `beep()` guards
+  `37 <= hz`, `snd(24, 8)` is 32 Hz, and the `ValueError` is swallowed by the
+  `except` in `snd()`. The rocket launch is one of the casualties.
+
+Released on landing.
