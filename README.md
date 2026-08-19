@@ -104,6 +104,10 @@ That is exactly how UnoDOS gets its speed: the same Python engine, with the
 span writers in C. `tools/duum_golden.py` will tell you whether your
 replacement is pixel-exact.
 
+Two ports do exactly that. UnoDOS supplies the span writers in C on bare metal,
+and [`ports/web/`](ports/web/) supplies the same ones to a browser, where the
+whole runtime and engine come to about 300 KB of WebAssembly.
+
 ## Layout
 
 ```
@@ -113,6 +117,8 @@ duum/
   hostapi.py         picks the platform (below)
   hosts/desktop.py   file I/O, clock, key state, on the standard library
   frontends/tkwin.py a tkinter window
+ports/
+  web/             Duum in a browser: MicroPython + the C canvas, in wasm
 packaging/
   icon.py            the app icon, drawn from scratch, every platform
   build_exe.py       the Windows .exe

@@ -116,6 +116,7 @@ exists so that when it does not, the seams are already named.
 | bindings + settings file | `duum/hosts/desktop.py` | the host names keys, because a tkinter keysym means nothing on the device |
 | the app icon | `packaging/icon.py`, `packaging/icons/` | generated; regenerate in the same commit as a change to the drawing |
 | gates | `tools/duum_verify.py`, `tools/duum_golden.py`, `tools/duum_collide.py`, `tests/input_menu.py` | `duum_verify` shares no code with the engine ON PURPOSE, so never "simplify" it by importing from `duum.engine` |
+| web port | `ports/web/` | MicroPython + the C canvas, compiled to wasm. Consumes both contracts; changes neither. Embeds `dist/unodos/DUUM.PY` verbatim, so an engine change reaches it by rebuilding, not by editing. |
 | build + packaging | `tools/build.py`, `packaging/build_exe.py` | |
 | generated distributions | `dist/desktop/duum.py`, `dist/unodos/DUUM.PY` | **generated, never hand-edit** (§4) |
 

@@ -54,3 +54,26 @@ git worktree add ../duum-<slice> -b <slice> origin/master
 ```
 
 `AGENTS.md` §6 assumed that and did not say it. It says it now.
+
+## 2026-08-18 — CLAIM: a browser port, in `ports/web/`
+
+Taking `ports/web/` — a new port, not a change to either contract. It embeds
+`dist/unodos/DUUM.PY` verbatim and implements the platform surface and the span
+writers against WebAssembly, so the engine is untouched and reaches it by
+rebuilding rather than by editing.
+
+Released on landing. Nothing in `duum/` or `dist/` is claimed.
+
+## 2026-08-18 — NOTE: the span-writer contract now has three implementations
+
+`duum/raster.py` (reference), UnoDOS's `pc64/upy_port/mod_uno.c` (device), and
+now `ports/web/mod_uno.c` (browser). The web one is transcribed from the device
+one line-for-line rather than rewritten, because `duum_golden` is pixel-exact
+and a tidier loop that rounds one texel differently is a failing gate.
+
+Practical consequence for anyone changing a span signature or its pixel
+semantics: it is now **two** downstream C files, not one, and they are in
+different repositories. `AGENTS.md` §2 already says a break needs a note here
+and a mention in the release notes; this is the reminder that the note has two
+addressees.
+
