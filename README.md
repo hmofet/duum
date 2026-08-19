@@ -61,7 +61,7 @@ not ours to ship, so none is bundled.
 
 Commercial IWADs (`DOOM.WAD`, `DOOM2.WAD`, …) work too if you own them.
 
-## Speed, honestly
+## Speed
 
 Duum splits in two, and the halves behave differently:
 
@@ -69,22 +69,18 @@ Duum splits in two, and the halves behave differently:
   resolution because it works in ~220 internal columns.
 - **`draw()`**: the rasteriser, writing every pixel. Linear in pixel count.
 
-Measured on a Ryzen 7 5700X3D, CPython 3.12, Freedoom E1M1:
-
-| resolution | render | draw | total | fps |
-|---|---|---|---|---|
-| 640×400 | 3.2 ms | 208.3 ms | 211.5 ms | 4.7 |
-| 518×382 | 3.2 ms | 161.7 ms | 164.9 ms | 6.1 |
-| 400×300 | 3.4 ms | 95.5 ms | 98.9 ms | 10.1 |
-| **320×200** | **3.1 ms** | **50.9 ms** | **53.9 ms** | **18.5** |
-| 256×160 | 3.1 ms | 31.9 ms | 35.0 ms | 28.6 |
-| 160×100 | 2.6 ms | 13.8 ms | 16.4 ms | 60.9 |
-
-So the engine is not the bottleneck: the per-pixel loops are, by a factor of
-about twenty. `--size` is therefore the speed control; 320×200 is Doom's own
+The consequence is the thing worth knowing: the engine is not the bottleneck,
+the per-pixel loops are, and by a wide margin. So `--size` is the speed
+control rather than anything about the geometry, and 320×200 is Doom's own
 resolution and the default.
 
-### Making it fast
+Numbers are deliberately not quoted here. They belong to one machine, one
+CPython and one level, they age badly, and quoting them invites comparison
+with a build somebody else measured differently. `tools/bench.py` prints the
+table for the machine actually in front of you, which is the only one that
+answers the question.
+
+## Making it fast
 
 `duum/raster.py` is the seam. It is a plain object with a span-writer
 contract:
@@ -124,7 +120,7 @@ packaging/
   build_exe.py       the Windows .exe
 tools/
   build.py           fold the package into the single-file distributions
-  bench.py           the table above
+  bench.py           render/draw timings for this machine
   duum_golden.py     pixel-exact regression gate
   duum_verify.py     independent geometry oracle
 ```
