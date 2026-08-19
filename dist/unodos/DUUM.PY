@@ -681,6 +681,107 @@ ONE_SHOT = (2, 3, 4, 10, 11, 16, 19, 21, 36, 37, 38, 39, 51, 52,
             103, 109, 110, 112, 113, 114, 121, 122, 124, 125)
 
 
+# ---- sound -----------------------------------------------------------------
+# A sound is a lump in the WAD, not a note.  The engine names the lump, works
+# out how loud it is and how far to which side, and hands the samples over
+# once.  The mixing and the DAC belong to the host, because the host is the
+# only thing that knows what audio hardware is underneath it.
+#
+# Rows are (event, lump, midi, ticks).  The lump names are read from the WAD's
+# own directory and the event-to-lump mapping is the one the public Doom specs
+# describe; nothing here came out of a source release (AGENTS.md section 10).
+# The midi/ticks pair is the beep that event used to make, kept per event
+# rather than per lump, so a host that implements no sample playback sounds
+# exactly as it did before, variation in the monster voices included.
+#
+# The index into SFX is the slot number the host is handed.  It means nothing
+# outside a single run: sfx_load gives the host the samples for a slot, so
+# nobody downstream has to agree with us about numbering across versions.
+SFX = (
+    # the player and his weapons
+    ("punch",    b"DSPUNCH",  30, 2),
+    ("pistol",   b"DSPISTOL", 55, 2),
+    ("shotgun",  b"DSSHOTGN", 48, 3),
+    ("chaingun", b"DSPISTOL", 55, 1),
+    ("rocket",   b"DSRLAUNC", 38, 4),
+    ("plasma",   b"DSPLASMA", 66, 1),
+    ("dryfire",  b"DSNOWAY",  35, 2),
+    ("plpain",   b"DSPLPAIN", 33, 3),
+    ("pldeath",  b"DSPLDETH", 18, 8),
+    ("oof",      b"DSOOF",    40, 3),
+    ("noway",    b"DSNOWAY",  45, 4),
+    ("itemup",   b"DSITEMUP", 80, 2),
+    ("wpnup",    b"DSWPNUP",  80, 2),
+    # the world
+    ("swtchn",   b"DSSWTCHN", 50, 3),
+    ("swtchx",   b"DSSWTCHX", 60, 8),
+    ("doropn",   b"DSDOROPN", 28, 6),
+    ("dorcls",   b"DSDORCLS", 29, 4),
+    ("pstart",   b"DSPSTART", 24, 8),
+    ("pstop",    b"DSPSTOP",  27, 3),
+    ("stnmov",   b"DSSTNMOV", 24, 8),
+    ("telept",   b"DSTELEPT", 70, 6),
+    ("barexp",   b"DSBAREXP", 20, 6),
+    ("rxplod",   b"DSRXPLOD", 22, 5),
+    ("firsht",   b"DSFIRSHT", 42, 3),
+    ("firxpl",   b"DSFIRXPL", 23, 4),
+    # the monsters, whose voices are per family below
+    ("posit1",   b"DSPOSIT1", 36, 3),
+    ("posit2",   b"DSPOSIT2", 38, 3),
+    ("posit3",   b"DSPOSIT3", 40, 3),
+    ("popain",   b"DSPOPAIN", 44, 2),
+    ("podth1",   b"DSPODTH1", 20, 4),
+    ("podth2",   b"DSPODTH2", 22, 4),
+    ("podth3",   b"DSPODTH3", 24, 4),
+    ("posact",   b"DSPOSACT", 34, 1),
+    ("bgsit1",   b"DSBGSIT1", 37, 3),
+    ("bgsit2",   b"DSBGSIT2", 39, 3),
+    ("bgdth1",   b"DSBGDTH1", 21, 4),
+    ("bgdth2",   b"DSBGDTH2", 23, 4),
+    ("bgact",    b"DSBGACT",  35, 1),
+    ("sgtsit",   b"DSSGTSIT", 41, 3),
+    ("sgtatk",   b"DSSGTATK", 27, 2),
+    ("sgtdth",   b"DSSGTDTH", 25, 4),
+    ("dmpain",   b"DSDMPAIN", 43, 2),
+    ("dmact",    b"DSDMACT",  33, 1),
+    ("cacsit",   b"DSCACSIT", 42, 3),
+    ("cacdth",   b"DSCACDTH", 26, 4),
+    ("brssit",   b"DSBRSSIT", 43, 3),
+    ("brsdth",   b"DSBRSDTH", 19, 4),
+    ("sklatk",   b"DSSKLATK", 28, 2),
+    ("claw",     b"DSCLAW",   26, 2),
+)
+
+SFXI = {}
+for _i in range(len(SFX)):
+    SFXI[SFX[_i][0]] = _i
+
+# A monster's voice, by sprite family:
+#   (sight, pain, death, attack, melee)
+# Every slot is a tuple so picking a variant needs no type test, and an empty
+# one means the family has no such sound (the lost soul never announces
+# itself).  Which family owns which lump follows the lump names themselves:
+# the PO set belongs to the former humans, BG to the imp, SGT/DM to the
+# demon, CAC to the cacodemon, BRS to the baron, SKL to the lost soul.
+MSND = {
+    b"POSS": (("posit1", "posit2", "posit3"), ("popain",),
+              ("podth1", "podth2", "podth3"), ("pistol",), ("claw",)),
+    b"SPOS": (("posit2",), ("popain",), ("podth2",), ("shotgun",), ("claw",)),
+    b"TROO": (("bgsit1", "bgsit2"), ("popain",), ("bgdth1", "bgdth2"),
+              ("firsht",), ("claw",)),
+    b"SARG": (("sgtsit",), ("dmpain",), ("sgtdth",), ("sgtatk",), ("sgtatk",)),
+    b"HEAD": (("cacsit",), ("dmpain",), ("cacdth",), ("firsht",), ("claw",)),
+    b"BOSS": (("brssit",), ("dmpain",), ("brsdth",), ("firsht",), ("claw",)),
+    b"SKUL": ((), ("dmpain",), ("firxpl",), ("sklatk",), ("sklatk",)),
+}
+
+# The distance model.  Full volume inside SND_FULL, silent past SND_MAX,
+# linear between: the two distances are the ones the specs give for Doom's
+# own clipping (1200 map units) and close-range cutoff (200).
+SND_FULL = 200.0
+SND_MAX = 1200.0
+
+
 class Mover:
     """One moving sector plane.  kind: 'door' (ceil up, wait, close),
     'open' (ceil up, stays), 'close' (ceil down, stays), 'lift' (floor down,
@@ -769,6 +870,10 @@ class Duum(uno.App):
             self.spr = Sprites(self.wad)
             self.have_ticks = hasattr(uno, "ticks")
             self.have_keys = hasattr(uno, "keys_down")
+            self.have_sfx = (hasattr(uno, "sfx_load") and
+                             hasattr(uno, "sfx_play"))
+            # per slot: 0 not asked for yet, 1 the host has it, 2 no such lump
+            self.sfx_state = [0] * len(SFX)
             self.kd = 0; self.kd_prev = 0
             self.rng = 0x29A5D1
             self.menu_init()
@@ -781,10 +886,122 @@ class Duum(uno.App):
         return (self.rng >> 16) & 0xFF
 
     def snd(self, midi, ticks):
+        """The fallback: one square-wave note, which is all beep() can say."""
         try:
             uno.beep(midi, ticks)
         except Exception:
             pass
+
+    def sfx_lump(self, name):
+        """A DS lump as (samples, rate), or (None, 0) if it is not usable.
+
+        The lump is a DMX sound: a little-endian header of format, sample rate
+        and sample count, then that many unsigned 8-bit mono samples.  Format 3
+        is sampled audio and the only one Doom's own WADs contain; anything
+        else is somebody's extension and is better left alone than guessed at.
+        The count is clamped to what is actually there, because a truncated
+        lump should go quiet rather than read off the end.
+        """
+        b = self.wad.lump(name)
+        if len(b) < 8:
+            return None, 0
+        fmt, rate, n = struct.unpack_from("<HHI", b, 0)
+        if fmt != 3 or rate < 1000:
+            return None, 0
+        if n > len(b) - 8:
+            n = len(b) - 8
+        if n < 1:
+            return None, 0
+        return b[8:8 + n], rate
+
+    def sound_at(self, x, y):
+        """(volume, separation) for a sound coming from x, y.
+
+        Separation is 0 hard left, 128 centre, 255 hard right, and the sign
+        comes from the renderer rather than from an opinion: a sprite's screen
+        column is `(RW / 2) + (dx * sin_a - dy * cos_a) * scr`, so that same
+        lateral term is positive exactly when the thing draws right of centre.
+        Deriving it instead of choosing it is how this stays in step with the
+        picture, which is the whole lesson of the left/right swap.
+        """
+        dx = x - self.px
+        dy = y - self.py
+        d = math.sqrt(dx * dx + dy * dy)
+        if d >= SND_MAX:
+            return 0, 128
+        if d <= SND_FULL:
+            vol = 255
+        else:
+            vol = int(255.0 * (SND_MAX - d) / (SND_MAX - SND_FULL))
+        if d < 1.0:
+            return vol, 128
+        lat = (dx * math.sin(self.pa) - dy * math.cos(self.pa)) / d
+        sep = int(128.0 + 127.0 * lat)
+        if sep < 0:
+            sep = 0
+        elif sep > 255:
+            sep = 255
+        return vol, sep
+
+    def sound(self, ev, x=None, y=None):
+        """Play a named sound, at x, y if it happens somewhere in the world.
+
+        The samples are read from the WAD once and handed to the host, which
+        keeps them by slot; after that a shot costs one call.  A host with no
+        sample playback, or one that raises on the attempt, falls back to the
+        note this event has always made, so no port goes silent for want of
+        being updated.
+        """
+        i = SFXI.get(ev)
+        if i is None:
+            return
+        row = SFX[i]
+        if self.have_sfx:
+            vol = 255
+            sep = 128
+            if x is not None:
+                vol, sep = self.sound_at(x, y)
+                if vol <= 0:
+                    return                 # too far away to be heard at all
+            try:
+                if self.sfx_state[i] == 0:
+                    pcm, rate = self.sfx_lump(row[1])
+                    if pcm is None:
+                        self.sfx_state[i] = 2
+                    else:
+                        uno.sfx_load(i, pcm, rate)
+                        self.sfx_state[i] = 1
+                if self.sfx_state[i] == 1:
+                    uno.sfx_play(i, vol, sep)
+                    return
+            except Exception:
+                self.have_sfx = False      # a host that throws has not got it
+        self.snd(row[2], row[3])
+
+    def mon_sound(self, t, which, roll):
+        """A monster's own voice: 0 sight, 1 pain, 2 death, 3 attack, 4 melee.
+
+        `roll` says whether to spend a random draw choosing between variants.
+        The two sites that used to spend one still do and the sites that did
+        not still do not, and the draw happens before any early return, because
+        the order of draws is part of the game's determinism and duum_collide
+        asserts on where 36,000 moves end up.
+        """
+        row = MSND.get(t[4])
+        ev = row[which] if row is not None else ()
+        r = self.rnd() if roll else 0
+        n = len(ev)
+        if n == 0:
+            return
+        self.sound(ev[r % n], t[0], t[1])
+
+    def pickup_sound(self, t):
+        """Weapons land with their own clatter; everything else is an item."""
+        pk = PICKUP.get(t[3])
+        if pk is not None and pk[0] == 4:
+            self.sound("wpnup")
+        else:
+            self.sound("itemup")
 
     # ---- game state ---------------------------------------------------------
     def new_game(self, level):
@@ -2306,7 +2523,7 @@ class Duum(uno.App):
         if best is not None:
             self.activate(best, 1)
         else:
-            self.snd(40, 3)
+            self.sound("oof")
 
     def activate(self, li, by_use):
         m = self.lvl
@@ -2321,7 +2538,7 @@ class Duum(uno.App):
                 self.msgset("You need a %s key." %
                             ("blue" if need == 1 else
                              "red" if need == 2 else "yellow"))
-                self.snd(45, 4)
+                self.sound("noway")
                 return
             si = m.sides[ld[6]][5]
             self.start_door(si, 'open' if stay else 'door')
@@ -2371,7 +2588,7 @@ class Duum(uno.App):
             elif n[:3] == b"SW2":
                 sd[f] = b"SW1" + n[3:]
         self.segrec = None            # cached texture tuples are now stale
-        self.snd(50, 3)
+        self.sound("swtchn")
 
     def _sector_busy(self, si):
         for mv in self.movers:
@@ -2396,7 +2613,7 @@ class Duum(uno.App):
             if target <= sec[1] and kind != 'close':
                 target = sec[1] + 1        # already open-ish; nudge
         self.movers.append(Mover(kind, si, sec, target))
-        self.snd(28, 6)
+        self.sound("doropn")
 
     def start_lift(self, si):
         if self._sector_busy(si):
@@ -2409,7 +2626,7 @@ class Duum(uno.App):
             if f < low:
                 low = f
         self.movers.append(Mover('lift', si, sec, low))
-        self.snd(24, 8)
+        self.sound("pstart")
 
     def start_floor_lower(self, si):
         if self._sector_busy(si):
@@ -2422,7 +2639,7 @@ class Duum(uno.App):
             if f < low:
                 low = f
         self.movers.append(Mover('floor', si, sec, low))
-        self.snd(24, 8)
+        self.sound("stnmov")
 
     def start_exit(self, secret):
         if secret and self.level in SECRET_MAP:
@@ -2434,7 +2651,7 @@ class Duum(uno.App):
         else:
             nxt = EP_ORDER[EP_ORDER.index(self.level) + 1]
         self.finish = (nxt, self.now)
-        self.snd(60, 8)
+        self.sound("swtchx")
 
     def teleport(self, tag):
         m = self.lvl
@@ -2449,7 +2666,7 @@ class Duum(uno.App):
                 self.psec_i = self.point_secidx(x, y)
                 self.fx.append([x, y, self.lvl.sectors[self.psec_i][0],
                                 b"TFOG", b"ABABCDEFGHIJ", 0.0, 15])
-                self.snd(70, 6)
+                self.sound("telept")
                 return
 
     def check_cross(self, ox, oy):
@@ -2493,7 +2710,7 @@ class Duum(uno.App):
                     break
         if got is not None:
             self.things_live.remove(got)
-            self.snd(80, 2)
+            self.pickup_sound(got)
             self.dirty = True
 
     def apply_pickup(self, typ, p):
@@ -2602,7 +2819,7 @@ class Duum(uno.App):
         w = WEAP[self.weapon]
         ak = w[4]
         if ak and self.ammo[ak] < w[5]:
-            self.snd(35, 2)
+            self.sound("dryfire")
             if self.weapon > 2:            # dry: drop to pistol or fist
                 self.weapon = 2 if self.ammo[1] > 0 else 1
                 self.hud_key = None
@@ -2615,25 +2832,25 @@ class Duum(uno.App):
         self.noise_wake()
         wk = self.weapon
         if wk == 1:
-            self.snd(30, 2)
+            self.sound("punch")
             self.melee_attack()
         elif wk == 2:
-            self.snd(55, 2)
+            self.sound("pistol")
             self.hitscan(self.pa, 5 + self.rnd() % 11)
         elif wk == 3:
-            self.snd(48, 3)
+            self.sound("shotgun")
             for _ in range(7):
                 sp = (self.rnd() - 128) / 1300.0
                 self.hitscan(self.pa + sp, 5 + self.rnd() % 11)
         elif wk == 4:
-            self.snd(55, 1)
+            self.sound("chaingun")
             sp = (self.rnd() - 128) / 2200.0
             self.hitscan(self.pa + sp, 5 + self.rnd() % 11)
         elif wk == 5:
-            self.snd(38, 4)
+            self.sound("rocket")
             self.spawn_proj(0, b"MISL", 20)
         elif wk == 6:
-            self.snd(66, 1)
+            self.sound("plasma")
             self.spawn_proj(0, b"PLSS", 5)
 
     def melee_attack(self):
@@ -2724,13 +2941,13 @@ class Duum(uno.App):
             t[11] = 0.11
             t[12] = 0
             self.mon_active = True
-            self.snd(20 + (self.rnd() & 7), 4)
+            self.mon_sound(t, 2, True)
         elif self.rnd() < ms[3]:
             t[10] = 3
             t[5] = MFRAMES[t[4]][2]
             t[8] = 0
             t[11] = 0.3
-            self.snd(44, 2)
+            self.mon_sound(t, 1, False)
 
     def explode_barrel(self, t):
         t[10] = 4
@@ -2740,7 +2957,7 @@ class Duum(uno.App):
         t[11] = 0.10
         t[12] = 0
         t[9] = 0
-        self.snd(20, 6)
+        self.sound("barexp", t[0], t[1])
         bx, by = t[0], t[1]
         for o in self.things_live:
             if o is t or (o[9] <= 0 and o[3] != 2035) or o[10] >= 4:
@@ -2767,10 +2984,11 @@ class Duum(uno.App):
             d -= ab
         self.health -= d
         self.hud_key = None
-        self.snd(33, 3)
+        self.sound("plpain")
         if self.health <= 0:
             self.health = 0
             self.dead = True
+            self.sound("pldeath")
             self.msgset("You died.  USE restarts the level.")
 
     # ---- monsters -----------------------------------------------------------
@@ -2818,7 +3036,7 @@ class Duum(uno.App):
                                 t[10] = 1
                                 t[5] = MFRAMES[t[4]][0]
                                 t[15] = self.now + 0.7 + (self.rnd() & 127) / 100.0
-                                self.snd(36 + (self.rnd() & 7), 3)
+                                self.mon_sound(t, 0, True)
                 continue
             self.mon_active = True
             if st == 3:                    # pain
@@ -2880,14 +3098,14 @@ class Duum(uno.App):
         dist = math.sqrt(dist2)
         if dist2 < 4900 or atk == 0 or atk == 6:
             if dist2 < 4900:
-                self.snd(26, 2)
+                self.mon_sound(t, 4, False)
                 self.damage_player((1 + self.rnd() % 10) *
                                    (4 if t[3] == 3002 else 3))
             return
         if atk == 1 or atk == 2:
             if not self.sight_clear(t[0], t[1], self.px, self.py):
                 return
-            self.snd(52, 2)
+            self.mon_sound(t, 3, False)
             pellets = 3 if atk == 2 else 1
             hitp = 0.45 - dist / 1400.0
             if hitp < 0.08: hitp = 0.08
@@ -2899,7 +3117,7 @@ class Duum(uno.App):
             mult = 3 if atk == 3 else 5 if atk == 4 else 8
             ang = math.atan2(self.py - t[1], self.px - t[0])
             self.spawn_proj(1, base, mult, t[0], t[1], t[7][0] + 32, ang)
-            self.snd(42, 3)
+            self.mon_sound(t, 3, False)
 
     # ---- projectiles + effects ----------------------------------------------
     def run_proj(self, dt):
@@ -2956,7 +3174,7 @@ class Duum(uno.App):
             if hit:
                 if p[5] == b"MISL":
                     exp = (b"MISL", b"BCD")
-                    self.snd(22, 5)
+                    self.sound("rxplod", p[0], p[1])
                 elif p[5] == b"PLSS":
                     exp = (b"PLSE", b"ABCDE")
                 else:
@@ -2974,8 +3192,13 @@ class Duum(uno.App):
         if not self.movers:
             return
         for mv in self.movers[:]:
+            ph = mv.phase
             if not mv.tick(dt):
                 self.movers.remove(mv)
+                if mv.kind == 'lift':
+                    self.sound("pstop")
+            elif mv.phase != ph and mv.phase == 2 and mv.kind == 'door':
+                self.sound("dorcls")       # the wait is over, it is coming down
         self.dirty = True
 
     def floor_damage(self):

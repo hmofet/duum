@@ -12,8 +12,25 @@
 #   keys_down()                -> int    OPTIONAL live key bitmap
 #   App                                  base class with the app callbacks
 #
-# ticks and keys_down are probed with hasattr, so a host may leave them out
-# and the engine falls back to its own timers.
+# and the optional sound calls, which a host implements as a set or not at
+# all:
+#
+#   sfx_load(slot, pcm, rate)            OPTIONAL keep a sample under `slot`
+#   sfx_play(slot, vol, sep)             OPTIONAL play it, mixed with the rest
+#
+# pcm is unsigned 8-bit mono at `rate` Hz, straight out of the WAD's DS lump.
+# vol is 0..255 and sep is 0 hard left, 128 centre, 255 hard right.  The
+# engine loads a slot the first time it needs it and then only ever plays it,
+# so the host owns the samples and may convert them to its own format once.
+# `slot` is small, dense and stable for the life of the program.
+#
+# Mixing is the host's job.  A one-voice host may drop the quietest sound
+# rather than refuse the call; nothing upstream can tell, and a missed
+# footstep is better than an exception in the middle of a frame.
+#
+# Every optional call is probed with hasattr, so a host may leave any of them
+# out: the engine falls back to its own timers, and to beep() for sound, and
+# the whole game still plays.
 #
 # UnoDOS supplies all of this natively, so if `uno` imports we are on the
 # device and it wins.  Anywhere else, the desktop host stands in.
