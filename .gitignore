@@ -12,6 +12,7 @@ exe/
 *.WAD
 shot*.png
 golden*.json
+tools/duum_golden.json
 
 # icon previews are for looking at, not for shipping
 packaging/icons/preview-*.png
