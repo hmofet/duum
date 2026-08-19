@@ -240,3 +240,58 @@ threads, one for the mixer and one for the score. Neither touches engine
 state; they read a sample list and an event list that are built before the
 thread starts. Keep it that way, or the engine acquires a lock on its hot path
 for the sake of a gunshot.
+
+## 2026-08-19, REQUEST answered: UnoDOS/pc64 implements all four sound calls
+
+The four optional calls are implemented on pc64 and landed on its master
+(`dcca4d22`..`9b7df661`, full merge gate green, SPECTEST 87 PASS 0 FAIL).
+`sfx_load`, `sfx_play`, `mus_play` and `mus_stop` all exist, so the device
+plays the WAD's own effects and its score rather than one note per event. No
+engine change was needed, which is what probing every one with `hasattr` is
+for; the vendored `DUUM.PY` was not touched. This closes the "not heard on
+pc64 hardware because pc64 implements none of them" half of the session-close
+note above - the other half, real hardware, is still open (see 3).
+
+Implementation detail lives in that repository's `pc64/AUDIO.md`. Three things
+belong HERE, because they are about the contract rather than about pc64.
+
+**1. `mus_play` taking the whole file is fine. Do not stream the conversion on
+our account.** The REQUEST offered to, if 66 KB of `D_E1M8` per level load was
+too much for a device. It is not: the kernel heap is 32 MB and the MicroPython
+heap is 16 MB, and the transient sat well inside both. One pass is simpler.
+
+**2. `sfx_load`'s result is never read, and `sound()` returns after `sfx_play`
+whatever it answers.** So a host with no audio hardware at all cannot decline
+politely: returning False from either call skips `self.snd(row[2], row[3])`
+entirely and the game goes MUTE rather than back to its beeps. Only an
+exception reaches that line.
+
+pc64 therefore raises `OSError` when no PCM device probed, and returns False
+only for transient refusals (an empty slot; the user's Music app holding the
+sound hardware). That reading matches the engine's own comment, "a host that
+throws has not got it", and it works: verified by booting with no sound device
+at all and reading `have_sfx` and `have_mus` back off the running app, both
+False after four shots.
+
+Worth saying out loud in `hostapi.py` all the same, because the obvious way to
+implement an optional call is to return False, and the failure that produces is
+silence - which reads as a mixer bug rather than a contract one. A
+belt-and-braces alternative on the engine side, if you want one: honour
+`sfx_load`'s result (leave `sfx_state[i]` at 0 when it is falsy) and fall
+through to the beep when `sfx_play` returns falsy. Not needed for this port;
+raised because the next host will meet the same edge.
+
+**3. Still unproven, and not the engine's problem:** none of this has been
+heard on real hardware. The ZimaBlade cannot settle it - that box has no audio
+hardware, so it is the no-DAC case above rather than the audible one - and a
+machine with a real codec is being arranged. QEMU's HDA is not a real codec,
+and "asserted in emulation, never run on metal" is the exact position the
+wall-collision bug hid in.
+
+Two numbers, since the REQUEST asked for measurement rather than assurance.
+The gate captures QEMU's wav sink and asserts on the samples the DAC consumed:
+panning is real (`sep=0` gives L 5729 / R 0, `sep=255` its mirror), and five
+100 ms windows carry the score's tone and an effect's tone AT ONCE - the mixer
+the REQUEST said was the missing piece. End to end with the real WAD:
+`have_sfx` and `have_mus` True, `err` None, one sample handed over on the
+first shot, and 46 of 65 captured seconds non-silent.
