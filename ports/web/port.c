@@ -90,14 +90,50 @@ void mp_hal_stdout_tx_strn_cooked(const char *str, size_t len)
  * The cost is that peak memory is the high-water mark within one frame rather
  * than at any instant. For an engine whose per-frame garbage is a display list
  * that is a small price, and it is bounded below by gc_get_max_new_split(). */
-static bool gc_pending;
+static bool   gc_pending;
+static size_t gc_heap_bytes;      /* exactly what gc.c is holding, right now */
+static unsigned gc_since_collect;
+
+/* gc.c's region allocator, wrapped so the total is known exactly. The size is
+ * stashed in front of the block because free() is not told how big the block
+ * was and gc.c does not remember either. */
+void *duum_heap_alloc(size_t n)
+{
+    size_t *p = (size_t *)malloc(n + sizeof(size_t));
+    if (!p) return NULL;
+    p[0] = n;
+    gc_heap_bytes += n;
+    return (void *)(p + 1);
+}
+
+void duum_heap_free(void *v)
+{
+    if (!v) return;
+    size_t *p = (size_t *)v - 1;
+    gc_heap_bytes -= p[0];
+    free(p);
+}
+
+size_t duum_gc_bytes(void) { return gc_heap_bytes; }
 
 void gc_collect(void) { gc_pending = true; }
 
+/* Collect between frames, where the C stack holds no Python.
+ *
+ * Pending is the usual trigger and means the allocator ran dry during the last
+ * frame. The periodic one matters as well, and is not belt and braces: because
+ * gc_collect() cannot free anything where gc.c calls it, gc.c's FIRST response
+ * to pressure is to GROW the heap, doubling it each time. Sweeping promptly
+ * afterwards is what returns those regions, and a frame that never quite fails
+ * an allocation would otherwise let the heap sit at its high-water mark
+ * indefinitely. */
+#define DUUM_GC_EVERY   60          /* frames, about two seconds */
+
 void duum_gc_top_level(void)
 {
-    if (!gc_pending) return;
+    if (!gc_pending && ++gc_since_collect < DUUM_GC_EVERY) return;
     gc_pending = false;
+    gc_since_collect = 0;
     gc_collect_start();
     /* No stack or register scan, on purpose: there is nothing live to find,
      * and on wasm looking would not have found it anyway. */
@@ -114,18 +150,23 @@ void duum_gc_top_level(void)
 
 size_t gc_get_max_new_split(void)
 {
-    /* Measured against the whole wasm memory rather than against the Python
-     * heap alone, which also happens to be the right thing to bound: the WAD
-     * sits in the same linear memory as the heap, so a 28 MB IWAD and a big
-     * level share one budget and the ceiling means what it says.
+    /* Measured against what gc.c is ACTUALLY holding, tracked in
+     * duum_heap_alloc/free above. Two wrong answers were tried first and both
+     * are worth naming, because both look right:
      *
-     * NOT gc_info(). That reads as the obvious way to ask how large the heap
-     * has become, and it recurses: with MICROPY_GC_SPLIT_HEAP_AUTO, gc_info()
-     * fills in a max_new_split field by calling THIS function. The result is
-     * mutual recursion that overflows the host stack, which arrives as
-     * "Maximum call stack size exceeded" some fifty frames into a game and
-     * looks nothing like a memory-accounting bug. */
-    size_t used = emscripten_get_heap_size();
+     * NOT emscripten_get_heap_size(). That is the size of the wasm linear
+     * memory, and wasm memory only ever GROWS: free() returns bytes to the C
+     * allocator but never to the engine. So it reports the high-water mark for
+     * the life of the tab, and one transient spike near the ceiling starves
+     * every later request permanently - with a nearly empty heap. That is a
+     * MemoryError in the middle of a level, minutes into a game that had been
+     * running fine, and it is what a player hit.
+     *
+     * NOT gc_info() either. It reads as the obvious way to ask how large the
+     * heap is, and it recurses: under MICROPY_GC_SPLIT_HEAP_AUTO it fills in a
+     * max_new_split field by calling THIS function. That one arrives as
+     * "Maximum call stack size exceeded" about fifty frames in. */
+    size_t used = duum_gc_bytes();
     return used >= DUUM_MEM_CEILING ? 0 : DUUM_MEM_CEILING - used;
 }
 

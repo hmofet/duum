@@ -54,7 +54,7 @@ stage.py          assembles the deployable bundle
 web/              the page: index.html, duum.js, duum-worker.js
 ```
 
-## The seven things that will bite
+## The eight things that will bite
 
 ### 1. The GC cannot scan the C stack, because on wasm there is no C stack to scan
 
@@ -80,7 +80,41 @@ between frames. Anything held across a call from JavaScript must be a
 **registered root** (`MP_REGISTER_ROOT_POINTER`), not a C static - see `g_app`
 in `main.c`. A C static is not somewhere the collector looks either.
 
-### 2. `gc_get_max_new_split()` must not call `gc_info()`
+### 2. The heap ceiling must count the HEAP, not the wasm memory
+
+`gc_get_max_new_split()` bounds how far the heap may grow, and it was measured
+against `emscripten_get_heap_size()`. That is the size of the wasm linear
+memory, and **wasm memory only ever grows**: `free()` returns bytes to the C
+allocator, never to the engine. So it reports the high-water mark for the life
+of the tab, and one transient spike near the ceiling starves every later
+request permanently, with a nearly empty heap.
+
+It reached a player as a `MemoryError` inside the BSP walk, minutes into a game
+that had been running fine. Nothing before that point looks wrong, because
+nothing is: the heap has plenty of room and the allocator is being told it does
+not.
+
+Three things compound here and it is worth seeing them together:
+
+- `gc_alloc()` calls `gc_collect()` **first** and grows the heap only if that
+  did not help. On this port `gc_collect()` frees nothing (trap 1), so growth
+  is the *first* response to pressure rather than the last.
+- `gc_try_add_heap()` **doubles** the total heap each time: 16, 32, 64, 128,
+  256 MB in five steps.
+- A region is handed back only when it falls **completely empty**, which
+  fragmentation makes rare.
+
+So the heap ratchets. The fix is to count exactly what `gc.c` holds, by routing
+`MP_PLAT_ALLOC_HEAP` / `MP_PLAT_FREE_HEAP` through `port.c` and keeping a
+running total, and to sweep between frames on a timer as well as on demand so
+the growth is actually returned. Measured after that: a 6000-frame run settles
+at 64 MB and stays there, against a 320 MB ceiling.
+
+`test_headless.mjs` asserts the **plateau**, not the absence of growth: it
+compares the heap at the midpoint with the heap at the end. Growth is fine and
+expected; growth that never stops is the bug.
+
+### 3. `gc_get_max_new_split()` must not call `gc_info()`
 
 `gc_info()` is the obvious way to ask how large the heap has become. With
 `MICROPY_GC_SPLIT_HEAP_AUTO` it fills in a `max_new_split` field **by calling
@@ -89,7 +123,7 @@ That surfaces as `Maximum call stack size exceeded` about fifty frames into a
 game, and looks nothing like a memory-accounting bug. Ask emscripten for the
 heap size instead.
 
-### 3. `MICROPY_STACK_CHECK` is off by default at this ROM level
+### 4. `MICROPY_STACK_CHECK` is off by default at this ROM level
 
 Without it, `mp_stack_set_limit()` compiles to a stub and runaway recursion runs
 off the host's call stack. A wasm stack overflow is not a Python exception; it
@@ -102,7 +136,7 @@ Note that the two stack limits measure different things: MicroPython's counts
 emscripten's shadow stack, while what actually fails is the host call stack. The
 margin between them is deliberately loose rather than snug.
 
-### 4. The key bits are not in the order they look like
+### 5. The key bits are not in the order they look like
 
 The held-key bitmap follows the **device's scancodes** (Up=1 Down=2 Right=3
 Left=4), so **bit 4 is turn RIGHT and bit 8 is turn LEFT**. Every frontend that
@@ -118,7 +152,7 @@ with the other gates; it is instant and it is the only thing that can see this
 class of bug, which is invisible in a screenshot and survives every rendering
 check.
 
-### 5. Escape has to be a one-shot AND a raw key
+### 6. Escape has to be a one-shot AND a raw key
 
 While the menu is up the engine wants every press as an EVENT rather than as
 held state, and says so through `app.wants_raw()`. The page therefore sends
@@ -132,7 +166,7 @@ leaving it out of `ONESHOT` means the menu appears not to exist at all. The
 headless gate cannot catch this, because it calls `duum_key()` directly and
 never goes through the page's routing; it took a browser and a screenshot.
 
-### 6. `hidden` does not hide an element whose class sets `display`
+### 7. `hidden` does not hide an element whose class sets `display`
 
 The poster that covers the canvas until Play is pressed is
 `.poster { display: flex }`, and it is hidden with `el.hidden = true`. That did
@@ -167,7 +201,7 @@ how this bug survived: the environment it was checked in could not composite,
 so nothing about paint or hit-testing meant anything, while `getComputedStyle`
 kept working and would have caught it.
 
-### 7. Name the wasm module something the page is not already called
+### 8. Name the wasm module something the page is not already called
 
 The emscripten output and the page script were both `duum.js`, so the worker's
 `import("./duum.js")` resolved to the page instead of the runtime and reported
@@ -264,7 +298,7 @@ up wrongly and neither of them shows in an ordinary frame.
 
 **What the headless gate cannot see is the page**: not its key routing, which
 it bypasses by calling the module directly, and not its layout, which it has no
-opinion about at all. Traps 5 and 6 are both what happens when that gap is not
+opinion about at all. Traps 6 and 7 are both what happens when that gap is not
 covered, and they are the two bugs that reached a player.
 
 `window.duumSnap()` does not close it either, and it is worth being precise

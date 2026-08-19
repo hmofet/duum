@@ -48,9 +48,21 @@
 #define MICROPY_ENABLE_GC               (1)
 #define MICROPY_GC_ALLOC_THRESHOLD      (1)
 /* See the note above: the heap grows on demand instead of collecting under a
- * live C stack. gc_get_max_new_split() in port.c bounds how far. */
+ * live C stack. gc_get_max_new_split() in port.c bounds how far.
+ *
+ * The region allocator is routed through port.c so that the exact number of
+ * bytes gc.c is holding is known. That number is what the ceiling has to be
+ * measured against, and getting it from anywhere else does not work: wasm
+ * linear memory only ever GROWS, so asking emscripten how big the heap is
+ * reports the high-water mark for ever and starves the allocator long after
+ * the memory was handed back. */
 #define MICROPY_GC_SPLIT_HEAP           (1)
 #define MICROPY_GC_SPLIT_HEAP_AUTO      (1)
+
+void *duum_heap_alloc(size_t n);
+void  duum_heap_free(void *p);
+#define MP_PLAT_ALLOC_HEAP(size)        duum_heap_alloc(size)
+#define MP_PLAT_FREE_HEAP(ptr)          duum_heap_free(ptr)
 #define MICROPY_ALLOC_PATH_MAX          (128)
 #define MICROPY_ALLOC_PARSE_CHUNK_INIT  (32)
 

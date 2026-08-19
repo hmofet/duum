@@ -32,6 +32,8 @@ mp_obj_t  uno_canvas_obj(void);
 void      duum_out_reset(void);
 const char *duum_out_text(void);
 void      duum_gc_top_level(void);
+void     *duum_heap_alloc(size_t n);
+size_t    duum_gc_bytes(void);
 
 /* The FIRST heap region. It is not the whole budget: MICROPY_GC_SPLIT_HEAP_AUTO
  * adds more when this fills (see the GC note in port.c), up to the ceiling
@@ -134,6 +136,12 @@ void duum_set_keys(int mask) { g_keys = mask; }
 
 /* ---- the log ring --------------------------------------------------------- */
 
+/* What gc.c is holding, in bytes. Exposed so the page and the gate can watch
+ * it: a heap that climbs and never comes back down is the shape of the bug
+ * this accounting exists to prevent, and it is invisible otherwise. */
+EMSCRIPTEN_KEEPALIVE
+int duum_heap_bytes(void) { return (int)duum_gc_bytes(); }
+
 EMSCRIPTEN_KEEPALIVE
 const char *duum_log(void) { return duum_out_text(); }
 
@@ -176,7 +184,9 @@ int duum_boot(int w, int h)
      * content and still trips long before the host stack is in danger. */
     mp_stack_set_limit(256 * 1024);
 
-    g_heap = (char *)malloc(DUUM_GC_HEAP_BYTES);
+    /* Through the tracked allocator, not malloc, so the first region counts
+     * towards the ceiling like every later one. */
+    g_heap = (char *)duum_heap_alloc(DUUM_GC_HEAP_BYTES);
     if (!g_heap) return -1;
     gc_init(g_heap, g_heap + DUUM_GC_HEAP_BYTES);
     mp_init();

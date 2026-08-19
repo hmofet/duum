@@ -62,6 +62,7 @@ const textCount = c("duum_text_count", "number", []);
 const textStr   = c("duum_text_str", "string", ["number"]);
 const key       = c("duum_key", "number", ["number", "number", "number"]);
 const wantsRaw  = c("duum_wants_raw", "number", []);
+const heapBytes = c("duum_heap_bytes", "number", []);
 
 // ---- 1. load the WAD ------------------------------------------------------
 const wad = readFileSync(wadPath);
@@ -93,7 +94,7 @@ let worst = 0, total = 0;
 // every texture the level uses, so on a large IWAD it can cost a second by
 // itself. One average over both phases hides the number that matters.
 const WARM = Math.min(5, Math.max(1, Math.floor(frames / 4)));
-let warmMs = 0;
+let warmMs = 0, heapLow = 0, heapPeak = 0, heapMid = 0;
 for (let i = 0; i < frames; i++) {
     const t = Date.now();
     let rcf;
@@ -108,10 +109,36 @@ for (let i = 0; i < frames; i++) {
     if (rcf !== 0) fail(`frame ${i} raised\n${log()}`);
     const ms = Date.now() - t;
     if (i < WARM) { warmMs += ms; continue; }
+    if (heapLow === 0) heapLow = heapBytes();
+    if (heapBytes() > heapPeak) heapPeak = heapBytes();
+    if (i === Math.floor(frames / 2)) heapMid = heapBytes();
     total += ms;
     if (ms > worst) worst = ms;
 }
 console.log(`warm-up: ${WARM} frames in ${warmMs} ms`);
+// ---- the heap, which is the thing that crashed a player -------------------
+// Collection can only happen BETWEEN frames on this port, so gc.c's first
+// response to allocation pressure is to GROW the heap, doubling it each time.
+// That is fine only if the growth comes back. A heap that ends a long run far
+// above where it settled early is the shape of the bug, and it does not show
+// up in a frame rate or in a picture: it shows up as a MemoryError minutes in.
+const mb = (n) => (n / 1048576).toFixed(1) + " MB";
+const heapEnd = heapBytes();
+console.log(`heap: ${mb(heapLow)} once warm, ${mb(heapMid)} at the midpoint, ` +
+            `${mb(heapEnd)} at the end, peak ${mb(heapPeak)}`);
+
+// The assertion is NOT "the heap never grows". It is allowed to grow, and it
+// will: gc.c doubles the heap on pressure, and it only ever hands a region
+// back when that region falls completely empty, which fragmentation makes
+// rare. A working set that settles at four times the initial region is fine.
+//
+// What must not happen is growth that never stops, because that ends as a
+// MemoryError several minutes into a game. So the test is that the second half
+// of the run costs no more than the first: a plateau, not a slope.
+if (heapMid > 0 && heapEnd > heapMid * 1.5 + 8 * 1048576) {
+    fail(`the heap was ${mb(heapMid)} at the midpoint and ${mb(heapEnd)} at ` +
+         "the end, so it is still climbing rather than levelling off");
+}
 frames -= WARM;
 const avg = total / frames;
 console.log(`${frames} frames: avg ${avg.toFixed(1)} ms ` +
