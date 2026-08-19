@@ -50,6 +50,15 @@ def main():
     except ImportError:
         sys.exit("PyInstaller is not installed.  pip install pyinstaller")
 
+    # The icon is generated, not committed as a binary: packaging/icon.py draws
+    # it from a handful of ellipses with zlib and struct, so there is one
+    # description of the mark rather than a set of files nobody can edit.
+    icon = os.path.join(HERE, "icons", "duum-windows.ico")
+    if not os.path.isfile(icon):
+        print("drawing the icon (packaging/icon.py)")
+        subprocess.check_call([sys.executable,
+                               os.path.join(HERE, "icon.py")])
+
     cmd = [sys.executable, "-m", "PyInstaller",
            "--onefile",
            "--name", "duum",
@@ -69,6 +78,7 @@ def main():
            "--exclude-module", "email",
            "--exclude-module", "http",
            "--exclude-module", "xml",
+           "--icon", icon,
            ]
     if not args.console:
         cmd.append("--windowed")
