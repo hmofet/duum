@@ -38,6 +38,9 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from stamp import stamped_entry                              # noqa: E402
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 ENTRY = os.path.join(ROOT, "dist", "desktop", "duum.py")
@@ -116,6 +119,16 @@ def check_tk():
             "override it with PYTHON=/path/to/python3.\n" % v)
 
 
+def archs_of(path):
+    """The architectures in a Mach-O file, e.g. ["x86_64", "arm64"]."""
+    try:
+        out = subprocess.run(["lipo", "-archs", path],
+                             capture_output=True, text=True)
+        return out.stdout.split() if out.returncode == 0 else []
+    except Exception:
+        return []
+
+
 def pick_identity():
     """The best signing identity this session can actually reach.
 
@@ -156,6 +169,10 @@ def main():
                     help="build and sign the .app, but do not package it")
     ap.add_argument("--identity", default=None,
                     help="codesign identity (default: the best one found)")
+    ap.add_argument("--arch", default="auto",
+                    choices=("auto", "universal2", "native"),
+                    help="auto (default) builds universal2 when the "
+                         "interpreter can, and native otherwise")
     args = ap.parse_args()
 
     if sys.platform != "darwin":
@@ -191,6 +208,26 @@ def main():
     ver = version()
     shutil.rmtree(APP, ignore_errors=True)
 
+    # universal2 needs an interpreter that is itself universal2, because
+    # PyInstaller bundles the interpreter it is running under; asking for it
+    # from a thin Python produces a thin app whatever the flag says.
+    have = archs_of(sys.executable)
+    print("  interpreter archs: %s" % (" ".join(have) or "unknown"))
+    want = args.arch
+    if want == "auto":
+        want = "universal2" if len(have) > 1 else "native"
+    if want == "universal2" and len(have) < 2:
+        sys.exit(
+            "\n--arch universal2 needs a universal2 Python, and this one is "
+            "%s.\n\nInstall the python.org macOS installer (its 'macos11' pkg "
+            "is universal2)\nand build with that interpreter, or pass --arch "
+            "native to accept an\napp for this machine's architecture only.\n"
+            % (" ".join(have) or "not a Mach-O"))
+    print("  building for: %s" % want)
+
+    # Every packaged build says which commit it came from; see stamp.py.
+    entry = stamped_entry(ROOT, WORK, "macos-" + want)
+
     cmd = [sys.executable, "-m", "PyInstaller",
            "--name", "Duum",
            "--distpath", OUT,
@@ -211,6 +248,8 @@ def main():
            "--exclude-module", "xml",
            "--icon", icon,
            ]
+    if want == "universal2":
+        cmd += ["--target-arch", "universal2"]
     if args.console:
         cmd += ["--onefile"]
     else:
@@ -219,7 +258,7 @@ def main():
         # nothing later edits the Info.plist.
         cmd += ["--windowed",
                 "--osx-bundle-identifier", BUNDLE_ID]
-    cmd.append(ENTRY)
+    cmd.append(entry)
 
     print("  " + " ".join(cmd[2:]))
     subprocess.check_call(cmd, cwd=ROOT)
@@ -247,6 +286,16 @@ def main():
         sign += ["--options", "runtime"]
     subprocess.check_call(sign + [APP])
     subprocess.check_call(["codesign", "--verify", "--verbose=1", APP])
+
+    # Check the result rather than trusting the flag. A thin app that was
+    # meant to be universal runs perfectly on the machine that built it and
+    # not at all on half the Macs it was built for, which is precisely the
+    # kind of failure that does not show up until somebody else tries it.
+    got = archs_of(os.path.join(APP, "Contents", "MacOS", "Duum"))
+    print("  app archs: %s" % (" ".join(got) or "unknown"))
+    if want == "universal2" and len(got) < 2:
+        sys.exit("asked for universal2 and got %s; refusing to ship it as one"
+                 % (" ".join(got) or "nothing"))
 
     size = subprocess.run(["du", "-sh", APP], capture_output=True,
                           text=True).stdout.split()[0]
