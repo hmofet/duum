@@ -591,8 +591,173 @@ def quiet():
         del _snd_voices[:]
 
 
+# ---- music -----------------------------------------------------------------
+# The engine hands over a Standard MIDI File and Windows already owns a
+# General MIDI synthesiser, so the whole player is: parse the file into events
+# stamped with a time in seconds, then send them through midiOutShortMsg on a
+# thread.  No synthesis here, and no third-party code: winmm is Windows and
+# ctypes is the standard library.
+#
+# The thread sleeps its way to each event, which is only accurate if the
+# system timer is, and Windows defaults to a ~15.6 ms tick.  timeBeginPeriod(1)
+# takes it to about 1 ms for as long as music is playing, which is the
+# difference between a score and a shuffle.
+
+_mus_gen = [0]                       # bumped to tell the current thread to go
+_mus_dev = [None]
+_mus_lock = threading.Lock()
+
+
+def _mus_events(b):
+    """A Standard MIDI File as [(seconds, message bytes)], or None.
+
+    Written to read what Duum's converter writes: format 0, one track.  A
+    format 1 file's later tracks are ignored rather than merged, which is
+    honest about what this does instead of half-doing it.  Running status is
+    accepted even though the converter never emits it, because a lenient
+    reader costs four lines.
+    """
+    if len(b) < 22 or b[0:4] != b"MThd" or b[14:18] != b"MTrk":
+        return None
+    div = (b[12] << 8) | b[13]
+    if div == 0 or div & 0x8000:
+        return None                       # SMPTE timing; Duum never makes it
+    tlen = (b[18] << 24) | (b[19] << 16) | (b[20] << 8) | b[21]
+    p = 22
+    end = p + tlen
+    if end > len(b):
+        end = len(b)
+    out = []
+    tick = 0
+    secs = 0.0
+    per = 500000 / 1e6 / div             # seconds per tick, until a tempo says
+    status = 0
+    while p < end:
+        d = 0
+        while p < end:
+            c = b[p]
+            p += 1
+            d = (d << 7) | (c & 0x7F)
+            if not (c & 0x80):
+                break
+        tick += d
+        secs += d * per
+        if p >= end:
+            break
+        c = b[p]
+        if c & 0x80:
+            status = c
+            p += 1
+        if status == 0xFF:
+            m = b[p]
+            p += 1
+            L = 0
+            while p < end:
+                c = b[p]
+                p += 1
+                L = (L << 7) | (c & 0x7F)
+                if not (c & 0x80):
+                    break
+            if m == 0x51 and L == 3:
+                per = ((b[p] << 16) | (b[p + 1] << 8) | b[p + 2]) / 1e6 / div
+            p += L
+            if m == 0x2F:
+                break
+            continue
+        if status in (0xF0, 0xF7):        # sysex: skipped, never sent
+            L = 0
+            while p < end:
+                c = b[p]
+                p += 1
+                L = (L << 7) | (c & 0x7F)
+                if not (c & 0x80):
+                    break
+            p += L
+            continue
+        hi = status & 0xF0
+        if hi in (0xC0, 0xD0):
+            out.append((secs, status | (b[p] << 8)))
+            p += 1
+        else:
+            out.append((secs, status | (b[p] << 8) | (b[p + 1] << 16)))
+            p += 2
+    return out
+
+
+def _mus_hush(h):
+    """All notes off, sustain off, on every channel."""
+    for c in range(16):
+        _mm.midiOutShortMsg(h, 0xB0 | c | (123 << 8))
+        _mm.midiOutShortMsg(h, 0xB0 | c | (64 << 8))
+
+
+def _mus_thread(events, loop, gen, h):
+    try:
+        _mm.timeBeginPeriod(1)
+        while True:
+            t0 = time.monotonic()
+            for when, msg in events:
+                while True:
+                    if _mus_gen[0] != gen:
+                        return
+                    d = t0 + when - time.monotonic()
+                    if d <= 0:
+                        break
+                    time.sleep(d if d < 0.005 else 0.005)
+                _mm.midiOutShortMsg(h, msg)
+            _mus_hush(h)
+            if not loop or _mus_gen[0] != gen:
+                return
+    except Exception:
+        pass
+    finally:
+        try:
+            _mm.timeEndPeriod(1)
+            if _mus_gen[0] == gen:
+                _mus_hush(h)
+        except Exception:
+            pass
+
+
+def mus_play(smf, loop):
+    """Play a Standard MIDI File, replacing whatever was playing."""
+    events = _mus_events(bytes(smf))
+    if not events:
+        return
+    with _mus_lock:
+        _mus_gen[0] += 1
+        gen = _mus_gen[0]
+        h = _mus_dev[0]
+        if h is None:
+            h = _ct.c_void_p()
+            # 0xFFFFFFFF is MIDI_MAPPER: whatever the user has set as their
+            # default synthesiser, rather than a device index guessed here.
+            if _mm.midiOutOpen(_ct.byref(h), 0xFFFFFFFF, 0, 0, 0) != 0:
+                raise OSError("midiOutOpen failed")
+            _mus_dev[0] = h
+        else:
+            _mus_hush(h)
+        t = threading.Thread(target=_mus_thread,
+                             args=(events, bool(loop), gen, h),
+                             name="duum-music")
+        t.daemon = True
+        t.start()
+
+
+def mus_stop():
+    with _mus_lock:
+        _mus_gen[0] += 1
+        if _mus_dev[0] is not None:
+            _mus_hush(_mus_dev[0])
+
+
+# What this machine can actually do decides what it admits to.  The engine
+# probes every optional call with hasattr, so a name left defined here is a
+# promise: leaving sfx_play in place on a box with no DAC would make the
+# engine stop falling back to beep() and simply go quiet.
 if _mm is None or _mm.waveOutGetNumDevs() < 1:
-    # No audio hardware, so do not advertise the calls: the engine probes with
-    # hasattr and would otherwise think this machine could play samples.
     del sfx_load
     del sfx_play
+if _mm is None or _mm.midiOutGetNumDevs() < 1:
+    del mus_play
+    del mus_stop

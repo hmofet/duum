@@ -425,6 +425,20 @@ def main():
     check("percussion lands on MIDI channel 9", 9 in r["notech"],
           "note channels: " + str(sorted(r["notech"])))
 
+    # The desktop player reads that file back with its own parser, so the two
+    # have to agree about how long the score is.  A parser that drops events
+    # still "works": it just plays a shorter, thinner piece, and nothing but
+    # this would say so.
+    smf = engine.mus_to_midi(app.wad.lump(b"D_E1M1"))
+    evs = desktop._mus_events(smf)
+    check("the desktop player parses what the engine wrote", bool(evs))
+    if evs:
+        check("and agrees about the length of the score",
+              abs(evs[-1][0] - r["secs"]) < 0.5,
+              "player %.1fs vs reader %.1fs" % (evs[-1][0], r["secs"]))
+        check("and finds every note in it", len(evs) >= r["notes"],
+              "%d events for %d notes" % (len(evs), r["notes"]))
+
     print("%d check(s) failed" % len(FAILED))
     return 1 if FAILED else 0
 
