@@ -19,7 +19,7 @@ python stage.py --out ~/duum-web/bundle --wad ~/freedoom1.wad \
 
 The obvious way to put Duum in a browser is to run the machine it already runs
 on: UnoDOS under QEMU-compiled-to-wasm, which exists and works. It was measured,
-and it is not viable — **0.13 fps, with the first frame four to six minutes
+and it is not viable: **0.13 fps, with the first frame four to six minutes
 after launch.** The full write-up is in unodos-site's `BROWSER-WIDGET.md`.
 
 Nothing about that is Duum's fault, and nothing about it needed emulating.
