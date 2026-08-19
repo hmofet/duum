@@ -133,6 +133,27 @@ The platform surface is deliberately tiny: `size`, `read_at`, `beep`,
 `quiet`, optional `ticks` and `keys_down`, and an `App` base class. That is
 the entire list of things a port has to provide.
 
+Five more are optional, and a port that supplies none of them still plays the
+whole game:
+
+```
+pref_get(name) / pref_set(name, value)      remember a setting
+bind_name(action)                           what key is on this action
+bind_set(action, ...) / bind_reset()        change it
+```
+
+They are what the menu's FPS toggle and Controls screen run on, and every one
+is probed with `hasattr`, so their absence is a smaller menu rather than a
+crash: the Controls screen says the platform cannot remap keys, which is true,
+and better than offering a control that would do nothing.
+
+Note what is *not* in that list. The engine never learns what a key is
+**called**. It names actions; naming keys is the host's job, because a tkinter
+keysym, a browser `code` and a UnoDOS scancode have nothing in common. So
+capturing a rebind ("press a key now") belongs to whatever knows the key: a
+frontend where there is one, and otherwise the engine hands the host the raw
+event and takes yes or no back.
+
 ## Building the distributions
 
 ```bash
