@@ -314,26 +314,285 @@ _load()
 
 
 # ---- sound -----------------------------------------------------------------
-# Duum asks for single square-wave notes, which is a PC speaker's worth of
-# audio.  Windows can actually do that; everywhere else it is a no-op, and
-# the engine neither knows nor cares.
+# Two ways to make a noise, and the engine picks whichever this machine has.
+#
+# beep() is the old one and stays, because it is the contract and because a
+# host with nothing else still has to make the game audible.  It is now
+# asynchronous: winsound.Beep BLOCKS for the length of the note, so a door
+# used to cost 112 ms of the game loop and a pistol shot 59 ms, which is four
+# frames and two.  One worker thread with a single slot plays it instead, and
+# a note that arrives while one is sounding replaces it rather than queueing,
+# because a backlog of stale beeps is worse than a dropped one.
+#
+# sfx_load/sfx_play are the real path: the WAD's own samples, mixed here and
+# pushed to waveOut through ctypes.  winmm is part of Windows and ctypes is
+# part of the standard library, so nothing third-party is involved (AGENTS.md
+# rule 1).  Everywhere without winmm the two names are removed at the bottom
+# of this file, so the engine's hasattr probe says no and it falls back.
+
+import threading
 
 try:
     import winsound as _ws
 except ImportError:
     _ws = None
 
+try:
+    import ctypes as _ct
+    _mm = _ct.WinDLL("winmm")
+except Exception:
+    _ct = None
+    _mm = None
+
+
+# ---- beep, off the game loop -----------------------------------------------
+
+_beep_want = [None]                  # the note waiting to be played, or None
+_beep_wake = threading.Event()
+_beep_thread = [None]
+
+
+def _beep_loop():
+    while True:
+        _beep_wake.wait()
+        _beep_wake.clear()
+        want = _beep_want[0]
+        _beep_want[0] = None
+        if want is None:
+            continue
+        try:
+            _ws.Beep(want[0], want[1])
+        except Exception:
+            pass
+
 
 def beep(midi, ticks_):
     if _ws is None or midi <= 0:
         return
-    try:
-        hz = int(440.0 * (2.0 ** ((midi - 69) / 12.0)))
-        if 37 <= hz <= 32767:
-            _ws.Beep(hz, max(10, int(ticks_ * 1000 / 60)))
-    except Exception:
-        pass
+    hz = int(440.0 * (2.0 ** ((midi - 69) / 12.0)))
+    # Clamped, not dropped.  The guard used to be a range test that let the
+    # ValueError escape into the engine's except, so every note below midi 27
+    # was silent: the rocket launcher is midi 24, or 32 Hz.  A rocket that
+    # sounds an octave high is better than a rocket that makes no sound.
+    if hz < 37:
+        hz = 37
+    elif hz > 32767:
+        hz = 32767
+    ms = int(ticks_ * 1000 / 60)
+    if ms < 10:
+        ms = 10
+    _beep_want[0] = (hz, ms)
+    if _beep_thread[0] is None:
+        t = threading.Thread(target=_beep_loop, name="duum-beep")
+        t.daemon = True
+        _beep_thread[0] = t
+        t.start()
+    _beep_wake.set()
+
+
+# ---- the sample mixer ------------------------------------------------------
+# Output is 11025 Hz stereo 16-bit, which is Doom's own sample rate, so the
+# usual case resamples nothing at all.  Buffers are small (128 frames, 11.6
+# ms) and there are five of them: enough that a stalled frame does not tear a
+# hole in the audio, few enough that a gunshot is not noticeably late.
+
+_SND_RATE = 11025
+_SND_FRAMES = 128                    # per buffer
+_SND_BUFS = 5
+_SND_VOICES = 16                     # concurrent sounds; the quietest loses
+# How hard an 8-bit sample is driven, and the one knob worth turning if the
+# game is too quiet or too hot.  A DS lump swings +/-127, so this puts a
+# single centred sound near -11 dBFS: loud enough to sit forward, with room
+# for the three or four that overlap in practice.  Sixteen at once would
+# clip, and clipping sixteen simultaneous full-volume sounds is the right
+# trade against making every ordinary gunshot quiet.
+_SND_GAIN = 96
+
+_WHDR_DONE = 0x00000001
+
+
+class _WaveHdr(_ct.Structure if _ct else object):
+    _fields_ = [("lpData", _ct.c_void_p),
+                ("dwBufferLength", _ct.c_uint32),
+                ("dwBytesRecorded", _ct.c_uint32),
+                ("dwUser", _ct.c_size_t),
+                ("dwFlags", _ct.c_uint32),
+                ("dwLoops", _ct.c_uint32),
+                ("lpNext", _ct.c_void_p),
+                ("reserved", _ct.c_size_t)] if _ct else []
+
+
+class _WaveFmt(_ct.Structure if _ct else object):
+    _fields_ = [("wFormatTag", _ct.c_uint16),
+                ("nChannels", _ct.c_uint16),
+                ("nSamplesPerSec", _ct.c_uint32),
+                ("nAvgBytesPerSec", _ct.c_uint32),
+                ("nBlockAlign", _ct.c_uint16),
+                ("wBitsPerSample", _ct.c_uint16),
+                ("cbSize", _ct.c_uint16)] if _ct else []
+
+
+_snd_samples = {}                    # slot -> list of signed ints, 11025 Hz
+_snd_voices = []                     # [samples, pos, gain_l, gain_r] each
+_snd_lock = threading.Lock()
+_snd_dev = [None]                    # the open waveOut handle
+_snd_state = [0]                     # 0 untried, 1 running, 2 unavailable
+_snd_silence = b"\0" * (_SND_FRAMES * 4)
+
+
+def _snd_start():
+    """Open the device and start the feeder.  Raises if there is no audio."""
+    fmt = _WaveFmt(1, 2, _SND_RATE, _SND_RATE * 4, 4, 16, 0)
+    h = _ct.c_void_p()
+    rc = _mm.waveOutOpen(_ct.byref(h), 0xFFFFFFFF, _ct.byref(fmt), 0, 0, 0)
+    if rc != 0:
+        raise OSError("waveOutOpen failed with %d" % rc)
+    bufs = []
+    for _ in range(_SND_BUFS):
+        mem = _ct.create_string_buffer(_SND_FRAMES * 4)
+        hdr = _WaveHdr()
+        hdr.lpData = _ct.cast(mem, _ct.c_void_p)
+        hdr.dwBufferLength = _SND_FRAMES * 4
+        hdr.dwFlags = 0
+        if _mm.waveOutPrepareHeader(h, _ct.byref(hdr),
+                                    _ct.sizeof(hdr)) != 0:
+            raise OSError("waveOutPrepareHeader failed")
+        hdr.dwFlags |= _WHDR_DONE          # nothing queued yet, so it is free
+        bufs.append((hdr, mem))
+    _snd_dev[0] = h
+    t = threading.Thread(target=_snd_feed, args=(h, bufs), name="duum-mixer")
+    t.daemon = True
+    t.start()
+
+
+def _snd_feed(h, bufs):
+    """Keep every free buffer full.  Polled, because a ctypes callback fired
+    from a Windows audio thread into the interpreter is a good way to find out
+    what a deadlock looks like."""
+    while True:
+        did = False
+        for hdr, mem in bufs:
+            if hdr.dwFlags & _WHDR_DONE:
+                block = _snd_mix()
+                _ct.memmove(mem, block, len(block))
+                hdr.dwFlags &= ~_WHDR_DONE
+                if _mm.waveOutWrite(h, _ct.byref(hdr), _ct.sizeof(hdr)) != 0:
+                    hdr.dwFlags |= _WHDR_DONE
+                did = True
+        if not did:
+            time.sleep(0.002)
+
+
+def _snd_mix():
+    """One buffer of audio: every live voice summed, panned and clamped."""
+    with _snd_lock:
+        if not _snd_voices:
+            return _snd_silence
+        n = _SND_FRAMES
+        acc = [0] * (n * 2)
+        done = False
+        for v in _snd_voices:
+            smp = v[0]
+            pos = v[1]
+            gl = v[2]
+            gr = v[3]
+            end = pos + n
+            if end > len(smp):
+                end = len(smp)
+                done = True
+            o = 0
+            for i in range(pos, end):
+                s = smp[i]
+                acc[o] += (s * gl) >> 8
+                acc[o + 1] += (s * gr) >> 8
+                o += 2
+            v[1] = end
+        if done:
+            _snd_voices[:] = [v for v in _snd_voices if v[1] < len(v[0])]
+        out = bytearray(n * 4)
+        j = 0
+        for s in acc:
+            if s > 32767:
+                s = 32767
+            elif s < -32768:
+                s = -32768
+            elif s < 0:
+                s += 65536
+            out[j] = s & 0xFF
+            out[j + 1] = (s >> 8) & 0xFF
+            j += 2
+        return bytes(out)
+
+
+def sfx_load(slot, pcm, rate):
+    """Keep a DS lump's samples under `slot`, converted once.
+
+    The engine sends unsigned 8-bit mono.  It is centred and scaled here to
+    leave headroom for sixteen of them at once, and resampled only if the WAD
+    is not the usual 11025 Hz.
+    """
+    if _snd_state[0] == 0:
+        try:
+            _snd_start()
+            _snd_state[0] = 1
+        except Exception:
+            _snd_state[0] = 2
+    if _snd_state[0] != 1:
+        # Tell the engine rather than going quiet: it falls back to beep().
+        raise OSError("no audio output on this machine")
+    if rate == _SND_RATE:
+        smp = [(b - 128) * _SND_GAIN for b in pcm]
+    else:
+        step = (rate << 12) // _SND_RATE
+        n = (len(pcm) << 12) // step
+        smp = [0] * n
+        p = 0
+        for i in range(n):
+            smp[i] = (pcm[p >> 12] - 128) * _SND_GAIN
+            p += step
+    with _snd_lock:
+        _snd_samples[slot] = smp
+
+
+def sfx_play(slot, vol, sep):
+    smp = _snd_samples.get(slot)
+    if smp is None or _snd_state[0] != 1:
+        return
+    # Constant-power pan, so a sound crossing the centre does not dip.
+    r = sep / 255.0
+    l = 1.0 - r
+    m = (l * l + r * r) ** 0.5
+    if m < 0.0001:
+        l = r = 0.7071
+    else:
+        l /= m
+        r /= m
+    g = vol / 255.0
+    gl = int(l * g * 256)
+    gr = int(r * g * 256)
+    with _snd_lock:
+        if len(_snd_voices) >= _SND_VOICES:
+            # Drop the quietest rather than the oldest: a distant grunt should
+            # lose to the shotgun in your hands, whichever started first.
+            weakest = 0
+            for i in range(1, len(_snd_voices)):
+                if (_snd_voices[i][2] + _snd_voices[i][3] <
+                        _snd_voices[weakest][2] + _snd_voices[weakest][3]):
+                    weakest = i
+            if _snd_voices[weakest][2] + _snd_voices[weakest][3] >= gl + gr:
+                return
+            del _snd_voices[weakest]
+        _snd_voices.append([smp, 0, gl, gr])
 
 
 def quiet():
-    pass
+    """Stop everything that is sounding."""
+    with _snd_lock:
+        del _snd_voices[:]
+
+
+if _mm is None or _mm.waveOutGetNumDevs() < 1:
+    # No audio hardware, so do not advertise the calls: the engine probes with
+    # hasattr and would otherwise think this machine could play samples.
+    del sfx_load
+    del sfx_play

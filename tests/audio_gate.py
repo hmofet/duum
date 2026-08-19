@@ -240,6 +240,58 @@ def main():
         print("    raised " + repr(e))
     check("an unknown event is a no-op", ok and rec.played == [])
 
+    # ---- 7. the desktop mixer's arithmetic ---------------------------------
+    # Reaching into the host's privates on purpose.  Everything below is true
+    # whether or not this machine has a DAC, which is the point: the sums are
+    # checkable on a build box, and only "does waveOut open" is not.
+    import array as _array
+
+    def block(voices):
+        desktop._snd_voices[:] = voices
+        b = desktop._snd_mix()
+        return _array.array("h", b)
+
+    hard_right = [[[100] * 300, 0, 0, 256]]
+    s = block(hard_right)
+    check("a hard-right sound is silent on the left",
+          max(abs(x) for x in s[0::2]) == 0)
+    check("and present on the right", min(s[1::2]) == 100)
+
+    s = block([[[100] * 300, 0, 256, 0]])
+    check("a hard-left sound is silent on the right",
+          max(abs(x) for x in s[1::2]) == 0)
+
+    # A centred sound is quieter per side than a panned one, but not by half:
+    # that is what the constant-power law is for.
+    s = block([[[100] * 300, 0, 181, 181]])
+    one = s[0]
+    check("a centred sound is on both sides equally", s[0] == s[1])
+    check("and is not halved by being centred", 60 <= one <= 80, str(one))
+
+    # The voice list has to drain, or every sound ever played is mixed for
+    # the rest of the session.
+    v = [[100] * 64, 0, 256, 256]
+    desktop._snd_voices[:] = [v]
+    desktop._snd_mix()
+    check("a finished voice is dropped", desktop._snd_voices == [])
+
+    v = [[100] * (desktop._SND_FRAMES * 3), 0, 256, 256]
+    desktop._snd_voices[:] = [v]
+    desktop._snd_mix()
+    check("a long voice keeps its place", v[1] == desktop._SND_FRAMES)
+    check("and stays in the mix", desktop._snd_voices == [v])
+
+    # Sixteen loud voices at once must clip, not wrap: a wrapped sample is a
+    # full-scale spike in the opposite direction, which is the loudest thing
+    # a speaker can be asked to do.
+    loud = []
+    for _ in range(desktop._SND_VOICES):
+        loud.append([[8128] * 300, 0, 256, 256])
+    s = block(loud)
+    check("too much at once clips instead of wrapping",
+          min(s) >= 0 and max(s) == 32767, "%d..%d" % (min(s), max(s)))
+    desktop._snd_voices[:] = []
+
     print("%d check(s) failed" % len(FAILED))
     return 1 if FAILED else 0
 
