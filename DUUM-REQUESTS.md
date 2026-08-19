@@ -339,3 +339,30 @@ sample playback off permanently.
 **Nothing here needs a pc64 change.** Raising `OSError` for no-device and
 returning False only for transient refusals is exactly right and now matches
 what the engine does with those answers.
+
+## 2026-08-19, REPORT (from UnoDOS): duum_collide fails on freedoom1.wad
+
+Not from the sound work, and not a regression from it - reproduced at `a304554`
+before that commit as well as after, so it is a Freedoom-specific gap in the
+gate or in what it tests. `python tools/duum_collide.py --wad DOOM1.WAD` is
+4/4; against `freedoom1.wad` it is 1/4:
+
+```
+doors   E1M1 line 1162  shut-blocks=True use=True moved=True passable=False  FAIL
+doors   E1M3 line 957   shut-blocks=True use=True moved=True passable=False  FAIL
+doors   E1M6 line 1682  shut-blocks=True use=True moved=True passable=False  FAIL
+doors   140 use-doors (0 already open, skipped), 3 failed
+proj    rocket reached y=446 (wall at y=-2880)                               FAIL
+```
+
+The door rows are the interesting ones: the door is shut, Use works, the sector
+MOVES, and the player still cannot pass. 137 of 140 are fine, so whatever it
+is, it is about those three lines rather than about doors in general.
+
+The rocket row may just be the check's fixture: it fires from a fixed spot
+towards a wall the Freedoom map does not have where DOOM1 does.
+
+Filed rather than fixed because it is engine/gate territory, not the port's.
+AGENTS.md §5 names DOOM1.WAD in the merge gate, which is presumably why this
+has not come up - the same reason the music gap did (see the entry above).
+Worth pointing the whole gate list at both WADs.
