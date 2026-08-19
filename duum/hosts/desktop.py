@@ -343,8 +343,8 @@ except Exception:
     _ct = None
 
 # The two system audio libraries this can drive.  Both are part of the
-# operating system the way winmm is part of Windows, so nothing third-party is
-# involved either way and rule 1 holds.
+# operating system, the way winmm is part of Windows, so nothing third-party
+# is involved either way and rule 1 holds.
 #
 # Only the SINK differs between them.  The mixer below is the same code on
 # both: it turns the engine's samples into 11025 Hz stereo blocks, and then
@@ -465,11 +465,11 @@ _snd_silence = b"\0" * (_SND_FRAMES * 4)
 
 # ---- the ALSA sink ---------------------------------------------------------
 # snd_pcm_set_params is libasound's own "just set it up" helper, which is
-# exactly the level this needs: one call rather than a hw_params dance.
+# exactly the level this needs: one call instead of a hw_params dance.
 #
 # soft_resample is 1 on purpose.  Doom's samples are 11025 Hz and most cards
 # only do 44100 or 48000, so without it the open fails on the machines this is
-# most likely to run on.  With it ALSA resamples, and the mixer stays at the
+# most likely to run on.  With it, ALSA resamples and the mixer stays at the
 # WAD's own rate on every platform.
 _SND_PCM_STREAM_PLAYBACK = 0
 _SND_PCM_FORMAT_S16_LE = 2
@@ -504,9 +504,9 @@ def _alsa_err(rc):
 def _snd_start_alsa():
     """Open ALSA and start the feeder.  Raises if there is no audio."""
     _alsa_bind()
-    # DUUM_ALSA_DEVICE is for the machines where "default" is not what you
-    # want, and for the gate, which points it at ALSA's file plugin and reads
-    # back the samples the mixer actually produced.
+    # DUUM_ALSA_DEVICE is here for the machines where "default" is not what
+    # you want, and for the gate, which points it at ALSA's file plugin and
+    # reads back the samples the mixer actually produced.
     dev = _os.environ.get("DUUM_ALSA_DEVICE", "default")
     h = _ct.c_void_p()
     rc = _alsa.snd_pcm_open(_ct.byref(h), dev.encode(),
@@ -541,8 +541,8 @@ def _snd_feed_alsa(h):
             n = _alsa.snd_pcm_writei(h, _ct.byref(buf, off * frame),
                                      _SND_FRAMES - off)
             if n < 0:
-                # An underrun is normal when a frame took too long: recover
-                # and carry on rather than tearing the sound down over it.
+                # An underrun is normal when a frame took too long; recover
+                # and carry on rather than tearing the sound down for it.
                 if _alsa.snd_pcm_recover(h, int(n), 1) < 0:
                     time.sleep(0.05)
                     break
@@ -730,76 +730,108 @@ _mus_lock = threading.Lock()
 def _mus_events(b):
     """A Standard MIDI File as [(seconds, message bytes)], or None.
 
-    Written to read what Duum's converter writes: format 0, one track.  A
-    format 1 file's later tracks are ignored rather than merged, which is
-    honest about what this does instead of half-doing it.  Running status is
-    accepted even though the converter never emits it, because a lenient
-    reader costs four lines.
+    Reads format 0 AND format 1: a format 1 file's tracks are CONCURRENT, so
+    they are parsed separately and merged by tick.  Reading track 0 only was
+    honest but useless on the files that need it - a format 1 conductor track
+    usually holds nothing but tempo, so Freedoom's music came out as no
+    events at all and played silently.  Running status and sysex are accepted
+    even though Duum's own converter emits neither.
     """
     if len(b) < 22 or b[0:4] != b"MThd" or b[14:18] != b"MTrk":
         return None
+    fmt = (b[8] << 8) | b[9]
+    ntrk = (b[10] << 8) | b[11]
     div = (b[12] << 8) | b[13]
     if div == 0 or div & 0x8000:
         return None                       # SMPTE timing; Duum never makes it
-    tlen = (b[18] << 24) | (b[19] << 16) | (b[20] << 8) | b[21]
-    p = 22
-    end = p + tlen
-    if end > len(b):
-        end = len(b)
-    out = []
-    tick = 0
-    secs = 0.0
-    per = 500000 / 1e6 / div             # seconds per tick, until a tempo says
-    status = 0
-    while p < end:
-        d = 0
-        while p < end:
-            c = b[p]
-            p += 1
-            d = (d << 7) | (c & 0x7F)
-            if not (c & 0x80):
-                break
-        tick += d
-        secs += d * per
-        if p >= end:
+    if fmt not in (0, 1) or ntrk < 1:
+        return None
+
+    evs = []                              # (tick, seq, msg) msg None = tempo
+    tempos = []                           # (tick, usec per quarter)
+    seq = 0
+    tp = 14
+    for _t in range(ntrk):
+        if tp + 8 > len(b) or b[tp:tp + 4] != b"MTrk":
             break
-        c = b[p]
-        if c & 0x80:
-            status = c
-            p += 1
-        if status == 0xFF:
-            m = b[p]
-            p += 1
-            L = 0
+        tlen = (b[tp + 4] << 24) | (b[tp + 5] << 16) | (b[tp + 6] << 8) | b[tp + 7]
+        p = tp + 8
+        end = p + tlen
+        if end > len(b):
+            end = len(b)
+        tp = end
+        tick = 0
+        status = 0
+        while p < end:
+            d = 0
             while p < end:
                 c = b[p]
                 p += 1
-                L = (L << 7) | (c & 0x7F)
+                d = (d << 7) | (c & 0x7F)
                 if not (c & 0x80):
                     break
-            if m == 0x51 and L == 3:
-                per = ((b[p] << 16) | (b[p + 1] << 8) | b[p + 2]) / 1e6 / div
-            p += L
-            if m == 0x2F:
+            tick += d
+            if p >= end:
                 break
-            continue
-        if status in (0xF0, 0xF7):        # sysex: skipped, never sent
-            L = 0
-            while p < end:
-                c = b[p]
+            c = b[p]
+            if c & 0x80:
+                status = c
                 p += 1
-                L = (L << 7) | (c & 0x7F)
-                if not (c & 0x80):
+            if status == 0xFF:
+                m = b[p]
+                p += 1
+                L = 0
+                while p < end:
+                    c = b[p]
+                    p += 1
+                    L = (L << 7) | (c & 0x7F)
+                    if not (c & 0x80):
+                        break
+                if m == 0x51 and L == 3:
+                    tempos.append((tick, (b[p] << 16) | (b[p + 1] << 8) | b[p + 2]))
+                p += L
+                if m == 0x2F:
                     break
-            p += L
-            continue
-        hi = status & 0xF0
-        if hi in (0xC0, 0xD0):
-            out.append((secs, status | (b[p] << 8)))
-            p += 1
-        else:
-            out.append((secs, status | (b[p] << 8) | (b[p + 1] << 16)))
-            p += 2
+                continue
+            if status in (0xF0, 0xF7):    # sysex: skipped, never sent
+                L = 0
+                while p < end:
+                    c = b[p]
+                    p += 1
+                    L = (L << 7) | (c & 0x7F)
+                    if not (c & 0x80):
+                        break
+                p += L
+                continue
+            hi = status & 0xF0
+            if hi in (0xC0, 0xD0):
+                evs.append((tick, seq, status | (b[p] << 8)))
+                p += 1
+            else:
+                evs.append((tick, seq, status | (b[p] << 8) | (b[p + 1] << 16)))
+                p += 2
+            seq += 1
+
+    if not evs:
+        return None
+    evs.sort(key=lambda e: (e[0], e[1]))
+    tempos.sort()
+
+    # ticks -> seconds, walking the tempo map: a tempo change applies from its
+    # own tick onward, so the conversion cannot be one multiplication.
+    out = []
+    ti = 0
+    cur = 500000
+    base_tick = 0
+    base_secs = 0.0
+    for tick, _s, msg in evs:
+        while ti < len(tempos) and tempos[ti][0] <= tick:
+            t_tick, t_us = tempos[ti]
+            base_secs += (t_tick - base_tick) * (cur / 1e6 / div)
+            base_tick = t_tick
+            cur = t_us
+            ti += 1
+        out.append((base_secs + (tick - base_tick) * (cur / 1e6 / div), msg))
     return out
 
 
@@ -874,6 +906,7 @@ def mus_stop():
 # probes every optional call with hasattr, so a name left defined here is a
 # promise: leaving sfx_play in place on a box with no DAC would make the
 # engine stop falling back to beep() and simply go quiet.
+#
 # Windows can be asked how many devices there are before committing to
 # anything.  ALSA cannot: whether "default" opens is only knowable by opening
 # it, and doing that at import time would take the audio device away from

@@ -932,6 +932,23 @@ def mus_to_midi(data):
     return head + b"MTrk" + struct.pack(">I", len(trk)) + bytes(trk)
 
 
+def wad_score(data):
+    """A D_ lump as a Standard MIDI File, or None if it is not a score.
+
+    A WAD may store its music EITHER as a MUS lump, which is id's format and
+    what mus_to_midi converts, OR as a Standard MIDI File already.  Both are
+    ordinary and Doom itself accepts both: MUS is a compact encoding of the
+    same events, not a different kind of music.
+
+    Freedoom ships MThd lumps, so an engine that only understands MUS plays no
+    music at all on it, silently, on every host.  That is what happened here,
+    and it survived because the sound work was verified against id's WAD.
+    """
+    if len(data) >= 14 and data[0:4] == b"MThd":
+        return data
+    return mus_to_midi(data)
+
+
 class Mover:
     """One moving sector plane.  kind: 'door' (ceil up, wait, close),
     'open' (ceil up, stays), 'close' (ceil down, stays), 'lift' (floor down,
@@ -1056,7 +1073,7 @@ class Duum(uno.App):
             data = self.wad.lump("D_" + level)
             if not data:
                 return
-            smf = mus_to_midi(data)
+            smf = wad_score(data)
             if smf is not None:
                 uno.mus_play(smf, 1)
         except Exception:

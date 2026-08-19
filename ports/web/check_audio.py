@@ -124,7 +124,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="duum-audio-"))
     want = {}
     for nm in names:
-        smf = engine.mus_to_midi(w.lump(nm))
+        smf = engine.wad_score(w.lump(nm))   # MUS or an SMF already
         (tmp / (nm.decode() + ".mid")).write_bytes(smf)
         r = read_smf(smf)
         want[nm.decode()] = r

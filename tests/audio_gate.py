@@ -88,81 +88,118 @@ class Deaf:
         pass
 
 
-def read_smf(b):
+def read_smf(b, strict=True):
     """Parse a Standard MIDI File and report what is in it.
 
     Written from the SMF spec and NOT from mus_to_midi: it insists on things
     the converter is free to get wrong, such as every event carrying its own
     status byte, the track length header agreeing with the file, and the
     delta times adding up to a sensible number of seconds.
+
+    `strict` is for OUR OWN output.  A score that came out of a WAD as a
+    finished SMF (Freedoom's do) is somebody else's file and may legally be
+    format 1 with many tracks and running status everywhere - none of which
+    the converter is allowed to emit.  Reading those with the strict rules
+    rejects perfectly good music, which is the mistake that let "Freedoom has
+    no music" sit undetected: the gate never got as far as looking.
     """
     if b[:4] != b"MThd":
         raise ValueError("no MThd")
     ln, fmt, ntrk, div = struct.unpack_from(">IHHH", b, 4)
-    if (ln, fmt, ntrk) != (6, 0, 1):
+    if strict:
+        if (ln, fmt, ntrk) != (6, 0, 1):
+            raise ValueError("header is %d/%d/%d" % (ln, fmt, ntrk))
+    elif ln != 6 or fmt not in (0, 1) or ntrk < 1:
         raise ValueError("header is %d/%d/%d" % (ln, fmt, ntrk))
     if b[14:18] != b"MTrk":
         raise ValueError("no MTrk")
     tlen = struct.unpack_from(">I", b, 18)[0]
-    if 22 + tlen != len(b):
+    if strict and 22 + tlen != len(b):
         raise ValueError("track says %d, file holds %d" % (tlen, len(b) - 22))
-    p = 22
-    endp = 22 + tlen
-    tick = 0
     tempo = 500000
     on = {}
     notes = 0
     notech = set()
-    while p < endp:
-        d = 0
-        while True:
-            c = b[p]
-            p += 1
-            d = (d << 7) | (c & 0x7F)
-            if not (c & 0x80):
-                break
-        tick += d
-        st = b[p]
-        if not (st & 0x80):
-            raise ValueError("running status at byte %d" % p)
-        p += 1
-        if st == 0xFF:
-            m = b[p]
-            p += 1
-            L = 0
+    longest = 0
+    tp = 14                                  # start of the first MTrk chunk
+    for _t in range(ntrk):
+        if b[tp:tp + 4] != b"MTrk":
+            raise ValueError("track %d has no MTrk" % _t)
+        tlen = struct.unpack_from(">I", b, tp + 4)[0]
+        p = tp + 8
+        endp = p + tlen
+        if endp > len(b):
+            raise ValueError("track %d runs past the file" % _t)
+        tp = endp
+        tick = 0
+        run = 0                              # running status, non-strict only
+        while p < endp:
+            d = 0
             while True:
                 c = b[p]
                 p += 1
-                L = (L << 7) | (c & 0x7F)
+                d = (d << 7) | (c & 0x7F)
                 if not (c & 0x80):
                     break
-            if m == 0x51:
-                tempo = (b[p] << 16) | (b[p + 1] << 8) | b[p + 2]
-            p += L
-            if m == 0x2F:
-                break
-            continue
-        hi = st & 0xF0
-        ch = st & 0x0F
-        if hi in (0x80, 0x90, 0xA0, 0xB0, 0xE0):
-            n = b[p]
-            v = b[p + 1]
-            p += 2
-            if hi == 0x90 and v > 0:
-                on[(ch, n)] = on.get((ch, n), 0) + 1
-                notes += 1
-                notech.add(ch)
-            elif hi == 0x80 or (hi == 0x90 and v == 0):
-                if on.get((ch, n)):
-                    on[(ch, n)] -= 1
-            elif hi == 0xB0 and n == 123:
-                for k in list(on):
-                    on[k] = 0
-        elif hi in (0xC0, 0xD0):
-            p += 1
-        else:
-            raise ValueError("bad status %02x" % st)
-    return {"secs": tick * (tempo / 1e6) / div, "notes": notes,
+            tick += d
+            st = b[p]
+            if not (st & 0x80):
+                if strict or not run:
+                    raise ValueError("running status at byte %d" % p)
+                st = run                     # the byte is data: reuse status
+            else:
+                p += 1
+                if st < 0xF0:
+                    run = st
+            if st == 0xFF:
+                m = b[p]
+                p += 1
+                L = 0
+                while True:
+                    c = b[p]
+                    p += 1
+                    L = (L << 7) | (c & 0x7F)
+                    if not (c & 0x80):
+                        break
+                if m == 0x51:
+                    tempo = (b[p] << 16) | (b[p + 1] << 8) | b[p + 2]
+                p += L
+                if m == 0x2F:
+                    break
+                continue
+            if st in (0xF0, 0xF7):           # sysex: a length then its bytes
+                L = 0
+                while True:
+                    c = b[p]
+                    p += 1
+                    L = (L << 7) | (c & 0x7F)
+                    if not (c & 0x80):
+                        break
+                p += L
+                continue
+            hi = st & 0xF0
+            ch = st & 0x0F
+            if hi in (0x80, 0x90, 0xA0, 0xB0, 0xE0):
+                n = b[p]
+                v = b[p + 1]
+                p += 2
+                if hi == 0x90 and v > 0:
+                    on[(ch, n)] = on.get((ch, n), 0) + 1
+                    notes += 1
+                    notech.add(ch)
+                elif hi == 0x80 or (hi == 0x90 and v == 0):
+                    if on.get((ch, n)):
+                        on[(ch, n)] -= 1
+                elif hi == 0xB0 and n == 123:
+                    for k in list(on):
+                        on[k] = 0
+            elif hi in (0xC0, 0xD0):
+                p += 1
+            else:
+                raise ValueError("bad status %02x" % st)
+        if tick > longest:
+            longest = tick                   # format 1 tracks run CONCURRENTLY
+    return {"secs": longest * (tempo / 1e6) / div, "notes": notes,
             "stuck": sum(on.values()), "tempo": tempo, "div": div,
             "notech": notech}
 
@@ -448,13 +485,21 @@ def main():
     bad = []
     stuck = []
     short = []
+    # wad_score, NOT mus_to_midi: a WAD may store its music as MUS or as a
+    # Standard MIDI File already, and this gate has to ask the same question
+    # the game asks.  Run against mus_to_midi it passed on id's WAD and would
+    # have failed on Freedoom, which is exactly the WAD the project ships
+    # against - and the engine really did play no music there.
     for nm in lumps:
-        smf = engine.mus_to_midi(app.wad.lump(nm))
+        raw_lump = app.wad.lump(nm)
+        smf = engine.wad_score(raw_lump)
         if smf is None:
             bad.append(nm.decode() + ": not converted")
             continue
         try:
-            r = read_smf(smf)
+            # strict only for what WE wrote; a WAD's own SMF answers to the
+            # spec, not to the converter's house style
+            r = read_smf(smf, strict=(raw_lump[:4] != b"MThd"))
         except Exception as e:
             bad.append(nm.decode() + ": " + str(e))
             continue
@@ -462,7 +507,7 @@ def main():
             stuck.append(nm.decode() + " x" + str(r["stuck"]))
         if not (3.0 <= r["secs"] <= 900.0) or r["notes"] < 20:
             short.append("%s %.1fs %dn" % (nm.decode(), r["secs"], r["notes"]))
-    check("every MUS lump converts to a readable SMF", not bad,
+    check("every music lump yields a readable SMF", not bad,
           "; ".join(bad[:3]))
     # A note left on when the score ends is a drone that survives the loop,
     # and it is the classic MUS conversion bug.
@@ -473,24 +518,37 @@ def main():
     check("the WAD's music was found at all", len(lumps) > 10,
           str(len(lumps)) + " lumps")
 
-    # The tick rate is the one number that cannot be eyeballed later: get it
-    # wrong and every score plays at the wrong speed while still being valid
-    # MIDI.  70 ticks a quarter at 500,000 us is 1/140 s exactly.
-    r = read_smf(engine.mus_to_midi(app.wad.lump(b"D_E1M1")))
-    hz = 1e6 / (r["tempo"] / float(r["div"]))
-    check("a tick is 140 Hz, which is MUS's own rate", abs(hz - 140.0) < 0.01,
-          "%.3f Hz" % hz)
+    raw = app.wad.lump(b"D_E1M1")
+    is_mus = raw[:4] == b"MUS\x1a"
+    r = read_smf(engine.wad_score(raw), strict=is_mus)
 
-    # Percussion has to move from MUS's channel 15 to MIDI's channel 9, or
-    # every drum comes out as whatever instrument is on 15.
-    check("percussion lands on MIDI channel 9", 9 in r["notech"],
-          "note channels: " + str(sorted(r["notech"])))
+    if is_mus:
+        # The tick rate is the one number that cannot be eyeballed later: get
+        # it wrong and every score plays at the wrong speed while still being
+        # valid MIDI.  70 ticks a quarter at 500,000 us is 1/140 s exactly.
+        hz = 1e6 / (r["tempo"] / float(r["div"]))
+        check("a tick is 140 Hz, which is MUS's own rate",
+              abs(hz - 140.0) < 0.01, "%.3f Hz" % hz)
+
+        # Percussion has to move from MUS's channel 15 to MIDI's channel 9, or
+        # every drum comes out as whatever instrument is on 15.
+        check("percussion lands on MIDI channel 9", 9 in r["notech"],
+              "note channels: " + str(sorted(r["notech"])))
+    else:
+        # Already a Standard MIDI File (Freedoom): it must be handed over
+        # BYTE FOR BYTE.  Re-encoding somebody's finished score would be a
+        # silent way to change how it sounds.
+        check("a score that is already an SMF is used verbatim",
+              engine.wad_score(raw) == raw,
+              "%d bytes in, %d out" % (len(raw), len(engine.wad_score(raw))))
+        check("...and it is not a MUS lump being waved through",
+              engine.mus_to_midi(raw) is None)
 
     # The desktop player reads that file back with its own parser, so the two
     # have to agree about how long the score is.  A parser that drops events
     # still "works": it just plays a shorter, thinner piece, and nothing but
     # this would say so.
-    smf = engine.mus_to_midi(app.wad.lump(b"D_E1M1"))
+    smf = engine.wad_score(raw)
     evs = desktop._mus_events(smf)
     check("the desktop player parses what the engine wrote", bool(evs))
     if evs:
@@ -501,7 +559,7 @@ def main():
               "%d events for %d notes" % (len(evs), r["notes"]))
 
     # ---- 9. the sink this platform actually has ----------------------------
-    # The mixer above is platform-neutral and is checked as such.  What differs
+    # The mixer above is platform-neutral and is checked as such. What differs
     # is the sink, and the thing worth asserting about it is that the host
     # admits to exactly what it can do: a name left defined here is a promise
     # the engine believes, and believing it wrongly is silence.
