@@ -5,7 +5,7 @@ this repository, whatever the task. It is the sibling of
 [UnoDOS's `AGENTS.md`](https://github.com/hmofet/unodos/blob/master/AGENTS.md)
 and follows the same shape deliberately, so an agent that knows one knows both.
 
-Duum is small — one engine file, one rasteriser, a host, a frontend, five
+Duum is small: one engine file, one rasteriser, a host, a frontend, five
 gates. The risk here is therefore not merge collision between many agents; it
 is **silently breaking a port you cannot see from this checkout**. Two contracts
 leave this repository and are compiled into other people's code (§2). Most of
@@ -16,7 +16,7 @@ this file exists to protect them.
 1. **The engine is pure Python and imports nothing outside the standard
    library.** At run time there is no third-party code, ever. This is the
    product, not a preference.
-2. **Two contracts leave this repo** — the platform surface and the span-writer
+2. **Two contracts leave this repo**: the platform surface and the span-writer
    surface (§2). Additive changes only; a break is a coordinated, announced
    change with a version bump.
 3. **`dist/` is generated.** Never hand-edit it. Edit `duum/`, then
@@ -30,7 +30,7 @@ this file exists to protect them.
 ## 1. What Duum is, so you know what you are protecting
 
 A Doom engine in pure Python: BSP walk, portal clipping, perspective-correct
-texture mapping, thing projection, and the whole game — doors, lifts, monsters,
+texture mapping, thing projection, and the whole game: doors, lifts, monsters,
 hitscan and projectile combat, pickups, status bar. It runs anywhere CPython
 does, and it also runs on **UnoDOS under MicroPython**, on a machine with no
 operating system underneath it.
@@ -45,7 +45,7 @@ here looks gratuitously plain, that is usually the reason.
 
 Everything else in this repo is an implementation detail you may restructure.
 These two are compiled into other people's code, and a break in either is
-invisible from here — no test in this repository will catch it.
+invisible from here, and no test in this repository will catch it.
 
 ### The platform surface (`duum/hostapi.py`)
 
@@ -92,7 +92,7 @@ flat_span(x, w, y0, count, grid, pal, a, ycen, dx, dy, wx, wy, lf)
 
 `duum/raster.py` is the *reference* implementation. UnoDOS supplies the same
 methods **in C** (`pc64/upy_port/mod_uno.c`), and the engine cannot tell the
-difference — that is where its speed comes from. So:
+difference, and that is where its speed comes from. So:
 
 - Changing a span signature or its pixel semantics is a **downstream break**.
   It needs a note in `DUUM-REQUESTS.md` and a mention in the release notes, so
@@ -109,22 +109,22 @@ exists so that when it does not, the seams are already named.
 | Area | Files | Notes |
 |---|---|---|
 | engine (BSP walk, clipping, texturing, game logic, collision) | `duum/engine.py` | the big one; MicroPython-compatible subset |
-| reference rasteriser | `duum/raster.py` | **contract** — see §2 |
-| platform surface + desktop host | `duum/hostapi.py`, `duum/hosts/` | **contract** — see §2 |
-| frontend | `duum/frontends/tkwin.py`, `duum/__main__.py` | desktop only; no port sees this. It must NOT keep its own idea of what a key means — that lives in the host, or it drifts, which is how left and right ended up swapped |
+| reference rasteriser | `duum/raster.py` | **contract**, see §2 |
+| platform surface + desktop host | `duum/hostapi.py`, `duum/hosts/` | **contract**, see §2 |
+| frontend | `duum/frontends/tkwin.py`, `duum/__main__.py` | desktop only; no port sees this. It must NOT keep its own idea of what a key means, because that lives in the host, or it drifts, which is how left and right ended up swapped |
 | menu, options, FPS counter | `menu_*` / `draw_menu` in `duum/engine.py` | drawn with `fill_rect` and `text` only, so every port gets it free |
 | bindings + settings file | `duum/hosts/desktop.py` | the host names keys, because a tkinter keysym means nothing on the device |
 | the app icon | `packaging/icon.py`, `packaging/icons/` | generated; regenerate in the same commit as a change to the drawing |
-| gates | `tools/duum_verify.py`, `tools/duum_golden.py`, `tools/duum_collide.py`, `tests/input_menu.py` | `duum_verify` shares no code with the engine ON PURPOSE — never "simplify" it by importing from `duum.engine` |
+| gates | `tools/duum_verify.py`, `tools/duum_golden.py`, `tools/duum_collide.py`, `tests/input_menu.py` | `duum_verify` shares no code with the engine ON PURPOSE, so never "simplify" it by importing from `duum.engine` |
 | build + packaging | `tools/build.py`, `packaging/build_exe.py` | |
-| generated distributions | `dist/desktop/duum.py`, `dist/unodos/DUUM.PY` | **generated — never hand-edit** (§4) |
+| generated distributions | `dist/desktop/duum.py`, `dist/unodos/DUUM.PY` | **generated, never hand-edit** (§4) |
 
 ## 4. `dist/` is generated, and so is UnoDOS's copy
 
 `tools/build.py` folds the package into two single files:
 
-- `dist/desktop/duum.py` — engine + rasteriser + tkinter frontend + CLI
-- `dist/unodos/DUUM.PY` — engine only; UnoDOS supplies `uno` and the C canvas
+- `dist/desktop/duum.py`: engine + rasteriser + tkinter frontend + CLI
+- `dist/unodos/DUUM.PY`: engine only; UnoDOS supplies `uno` and the C canvas
 
 Both are **committed** (that is the point: one file, no install step) and both
 are **generated**. An edit made directly to either is lost at the next build,
@@ -161,7 +161,7 @@ What each one is for, because they are not interchangeable:
   the engine. It must report **0 failing views**, always, whatever your change
   was. A change that "intends" to break it is a change that is wrong.
 - **`duum_golden` is the no-drift gate.** It hashes frames, so it answers "did
-  this optimisation change a single pixel?" — the question "looks the same"
+  this optimisation change a single pixel?", the question "looks the same"
   cannot answer. Baselines are per-WAD and therefore local, not committed;
   `save` yourself a baseline **before** you start optimising.
 - If a change is *meant* to move pixels, **look at the diff first**, say in the
@@ -181,14 +181,14 @@ What each one is for, because they are not interchangeable:
   direction against strafing rather than against the view angle, because
   "pa went up" is only meaningful if you already agree which way up is.
 - Gameplay changes not covered by it (combat, pickups, monster behaviour) are
-  outside all three by nature — the oracle renders, it does not simulate. Land
+  outside all three by nature: the oracle renders, it does not simulate. Land
   those with a **scripted reproduction** in the commit message: a map, a spawn
   point, a key sequence, and the before/after. "Feels right now" is not a
   result, and if the reproduction is worth writing twice it belongs in
   `duum_collide` instead.
 
 A Windows `.exe` (`python packaging/build_exe.py`) is not part of the gate; it
-is a release step, and PyInstaller is a **build-time tool only** — nothing
+is a release step, and PyInstaller is a **build-time tool only**, so nothing
 third-party ends up in the running program.
 
 ## 6. Branch discipline
@@ -236,7 +236,7 @@ Consequences that bind agents here:
 - Performance claims about the device must be **measured on the device**. The
   standing example: the pure-Python column loop was assumed to be slow enough
   on MicroPython to justify a C rasteriser for it, and an A/B on real hardware
-  measured 15.608 ms against 15.584 ms — no difference at all, with the C path
+  measured 15.608 ms against 15.584 ms, no difference at all, with the C path
   nominally ahead. Duum's renderer was ~11.7 ms of a ~46 ms frame; the frame
   cost was somewhere else entirely. Assume nothing about a target you are not
   holding.
@@ -252,7 +252,7 @@ contract, claim it there in one line.
 
 - One commit = one concern. A contract change and its consumers are separate
   commits, contract first.
-- Regenerate `dist/` **in the same commit** as the engine change that moves it —
+- Regenerate `dist/` **in the same commit** as the engine change that moves it:
   a distribution that lags its source is worse than one that is missing.
 - Say what you measured. A commit that claims something is faster, or that
   pixels are unchanged, should name the gate that says so.

@@ -1,6 +1,6 @@
 # Duum
 
-A Doom engine written in Python. No native code, no third-party packages —
+A Doom engine written in Python. No native code, no third-party packages:
 `struct` and `math` from the standard library, and nothing else.
 
 ![Duum rendering Freedoom E1M1](docs/screenshot.png)
@@ -22,7 +22,7 @@ now its own thing: it runs anywhere CPython does.
 python -m duum path/to/freedoom1.wad
 ```
 
-Or grab the single file — `dist/desktop/duum.py` is the whole game in one
+Or grab the single file: `dist/desktop/duum.py` is the whole game in one
 `.py` with no install step:
 
 ```bash
@@ -39,7 +39,7 @@ Ctrl or F to fire, Space or E to open and use, 1–6 to pick a weapon.
 nothing is waiting to happen the moment you come back. Under Options there is
 an FPS counter and a Controls screen: pick an action, press the key you want
 on it, and it is yours. Arrows, Enter and Esc drive the menu itself and cannot
-be rebound — a menu you can lock yourself out of would be worse than none.
+be rebound: a menu you can lock yourself out of would be worse than none.
 
 Settings live in one small text file, written when you change something:
 
@@ -55,9 +55,9 @@ Delete it to go back to the defaults, or use *Reset to defaults* in the menu.
 Duum is the engine. The WAD holds the levels, textures and sounds, and is
 not ours to ship, so none is bundled.
 
-- **[Freedoom](https://freedoom.github.io/download.html)** — free, freely
+- **[Freedoom](https://freedoom.github.io/download.html)**: free, freely
   redistributable, and what the test suite runs against.
-- **DOOM1.WAD** — the original shareware episode, still legally downloadable.
+- **DOOM1.WAD**: the original shareware episode, still legally downloadable.
 
 Commercial IWADs (`DOOM.WAD`, `DOOM2.WAD`, …) work too if you own them.
 
@@ -65,9 +65,9 @@ Commercial IWADs (`DOOM.WAD`, `DOOM2.WAD`, …) work too if you own them.
 
 Duum splits in two, and the halves behave differently:
 
-- **`render()`** — the geometry. Pure Python, and roughly *flat* in
+- **`render()`**: the geometry. Pure Python, and roughly *flat* in
   resolution because it works in ~220 internal columns.
-- **`draw()`** — the rasteriser, writing every pixel. Linear in pixel count.
+- **`draw()`**: the rasteriser, writing every pixel. Linear in pixel count.
 
 Measured on a Ryzen 7 5700X3D, CPython 3.12, Freedoom E1M1:
 
@@ -80,7 +80,7 @@ Measured on a Ryzen 7 5700X3D, CPython 3.12, Freedoom E1M1:
 | 256×160 | 3.1 ms | 31.9 ms | 35.0 ms | 28.6 |
 | 160×100 | 2.6 ms | 13.8 ms | 16.4 ms | 60.9 |
 
-So the engine is not the bottleneck — the per-pixel loops are, by a factor of
+So the engine is not the bottleneck: the per-pixel loops are, by a factor of
 about twenty. `--size` is therefore the speed control; 320×200 is Doom's own
 resolution and the default.
 
@@ -109,7 +109,7 @@ replacement is pixel-exact.
 ```
 duum/
   engine.py          the engine: BSP walk, clipping, texturing, game logic
-  raster.py          reference rasteriser — the seam to replace for speed
+  raster.py          reference rasteriser, the seam to replace for speed
   hostapi.py         picks the platform (below)
   hosts/desktop.py   file I/O, clock, key state, on the standard library
   frontends/tkwin.py a tkinter window
@@ -123,7 +123,7 @@ tools/
   duum_verify.py     independent geometry oracle
 ```
 
-The platform surface is deliberately tiny — `size`, `read_at`, `beep`,
+The platform surface is deliberately tiny: `size`, `read_at`, `beep`,
 `quiet`, optional `ticks` and `keys_down`, and an `App` base class. That is
 the entire list of things a port has to provide.
 
@@ -135,8 +135,8 @@ python tools/build.py --check path/to/freedoom1.wad
 
 writes two single files:
 
-- `dist/desktop/duum.py` — engine + rasteriser + tkinter frontend + CLI.
-- `dist/unodos/DUUM.PY` — engine only; UnoDOS supplies `uno` and a C canvas.
+- `dist/desktop/duum.py`: engine + rasteriser + tkinter frontend + CLI.
+- `dist/unodos/DUUM.PY`: engine only; UnoDOS supplies `uno` and a C canvas.
 
 Both are generated; edit the package and rebuild. A Windows `.exe` is built
 with [PyInstaller](https://pyinstaller.org):
@@ -145,7 +145,7 @@ with [PyInstaller](https://pyinstaller.org):
 python packaging/build_exe.py
 ```
 
-PyInstaller is a build-time tool only — the `.exe` embeds a Python
+PyInstaller is a build-time tool only: the `.exe` embeds a Python
 interpreter and Duum, and nothing else.
 
 The application icon is drawn rather than stored:
@@ -154,7 +154,7 @@ The application icon is drawn rather than stored:
 python packaging/icon.py --preview
 ```
 
-writes `packaging/icons/` — a Windows `.ico`, a macOS `.icns` and Linux PNGs —
+writes `packaging/icons/` (a Windows `.ico`, a macOS `.icns` and Linux PNGs)
 from about forty lines of ellipse arithmetic, with `zlib` and `struct` for the
 containers. No imaging library, for the same reason as everything else here.
 The mark is identical on every platform; the accent (the rim light and the bar
@@ -178,7 +178,7 @@ python tests/smoke_window.py freedoom1.wad          # the frontend actually runs
 raycaster written from the public Doom specifications that shares no code and
 no algorithm with the engine's BSP walk. It checks every screen column's
 surface classification and wall texture choice across 68 viewpoints, and
-separately asserts that the display list tiles every column exactly once —
+separately asserts that the display list tiles every column exactly once:
 no holes, no overdraw. It must report **0 failing views**.
 
 `duum_golden.py` hashes rendered frames across 54 viewpoints, which is the
@@ -187,7 +187,7 @@ catches a one-pixel drift.
 
 `input_menu.py` needs no display: it asks what a key press actually does. Its
 first check is there because "Left turns left" was **wrong in shipped builds**
-for as long as the frontend kept its own key table — the held-key bits follow
+for as long as the frontend kept its own key table, because the held-key bits follow
 the device's scancodes (Up=1 Down=2 Right=3 Left=4), so bit 4 is *right*, and a
 table written in the obvious order swaps the arrows. It is asserted against
 strafing rather than against the view angle, because turning left and strafing
@@ -202,14 +202,14 @@ opens all 110 use-doors in the episode, and fires a rocket at a wall.
 
 ## Working on Duum
 
-[`AGENTS.md`](AGENTS.md) is the working agreement for anyone — human or agent —
+[`AGENTS.md`](AGENTS.md) is the working agreement for anyone (human or agent)
 changing this repository: the two contracts that leave it (the platform surface
 and the span-writer surface), what is generated, the gates a change has to pass,
 and how fixes reach the ports. Read it before the first edit.
 
 ## Licence and credits
 
-Duum is licensed under the **Mozilla Public License 2.0** — see
+Duum is licensed under the **Mozilla Public License 2.0**, see
 [LICENSE](LICENSE).
 
 Written from the public Doom specifications (the unofficial Doom specs and

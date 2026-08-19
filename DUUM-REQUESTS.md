@@ -6,15 +6,15 @@ The async channel between agents, and the inbox for reports arriving from ports.
 
 Three kinds of entry:
 
-- **CLAIM** — "taking X" before you start work on the engine or either contract.
-- **REPORT** — a bug found on a port, filed here so it is fixed upstream rather
+- **CLAIM**: "taking X" before you start work on the engine or either contract.
+- **REPORT**: a bug found on a port, filed here so it is fixed upstream rather
   than patched into a vendored copy.
-- **REQUEST** — something you need that crosses a contract boundary (a new
+- **REQUEST**: something you need that crosses a contract boundary (a new
   optional platform call, a span-writer change), so the ports can plan for it.
 
 ---
 
-## 2026-08-18 — REPORT (from UnoDOS, ZimaBlade hardware): no wall collision
+## 2026-08-18, REPORT (from UnoDOS, ZimaBlade hardware): no wall collision
 
 Filed by the UnoDOS side in `pc64/METAL-FINDINGS.md` and summarised in
 `pc64/DUUM-UPSTREAM.md`. `blocked()` never referenced a linedef or a vertex, so
@@ -34,15 +34,15 @@ COLLISION entry in the same commit. Door operation was reported UNVERIFIED on
 hardware for want of anything solid to stand against; all 110 use-doors now
 pass the gate on the desktop, so it is worth re-testing on the device.
 
-## 2026-08-18 — CLAIM: engine collision, by the agent landing the above
+## 2026-08-18, CLAIM: engine collision, by the agent landing the above
 
 Released on landing.
 
-## 2026-08-18 — NOTE: two agents, one working tree
+## 2026-08-18, NOTE: two agents, one working tree
 
-Duum was being worked on from `Documents\Github\duum` by two agents at once —
-this collision fix and a `web-port` slice — and a git worktree has exactly one
-HEAD. The visible result: commits made while believing a branch was checked out
+Duum was being worked on from `Documents\Github\duum` by two agents at once
+(this collision fix and a `web-port` slice), and a git worktree has exactly
+one HEAD. The visible result: commits made while believing a branch was checked out
 landed on the other agent's branch, because it had been switched underneath.
 Nothing was lost (they were cherry-picked onto `master` and pushed), and
 `web-port` carries them as ancestors, so a rebase will drop the duplicates.
