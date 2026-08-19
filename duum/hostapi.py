@@ -61,6 +61,16 @@
 
 try:
     import uno                       # UnoDOS: the real thing, in C
+    # ...or somebody else's module of the same name.  LibreOffice ships one
+    # (Debian and Ubuntu call it python3-uno) and installs it into the system
+    # site-packages, so on an ordinary Linux desktop `import uno` succeeds and
+    # hands back the Python-UNO bridge.  Nothing here notices until the engine
+    # reaches `class Duum(uno.App)` and dies with "module 'uno' has no
+    # attribute 'App'", which names neither LibreOffice nor the real problem.
+    #
+    # So the import is not the test; having what this contract needs is.
+    if not hasattr(uno, "App"):
+        raise ImportError("a module called uno, but not UnoDOS's")
 except ImportError:
     from .hosts import desktop as uno
 
